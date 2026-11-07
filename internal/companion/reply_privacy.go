@@ -132,7 +132,7 @@ func reviewGroupMessages(ctx context.Context, model LanguageModel, access GroupR
 }
 
 func sensitiveReplyTool(tool string) bool {
-	return strings.HasPrefix(tool, "server_") || strings.HasPrefix(tool, "workspace_") || strings.HasPrefix(tool, "voice_library_") || strings.HasPrefix(tool, "music_") || strings.HasPrefix(tool, "plugin_") || tool == "agent_global_search" || tool == "wechat_read" || tool == "wechat_recall" || tool == "agent_owner_report"
+	return strings.HasPrefix(tool, "server_") || strings.HasPrefix(tool, "workspace_") || strings.HasPrefix(tool, "voice_library_") || strings.HasPrefix(tool, "music_") || strings.HasPrefix(tool, "plugin_") || tool == "agent_global_search" || tool == "wechat_read" || tool == "wechat_read_legacy" || tool == "wechat_recall" || tool == "agent_owner_report"
 }
 
 func (e *Engine) reviewProgressPrivacy(ctx context.Context, turns []map[string]string, tool, text string) (string, error) {

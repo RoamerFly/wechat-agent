@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "obs-preview",
+  "name": "OBS 节目预览",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64"],
+  "runtime": {
+    "transport": "http-adapter",
+    "entrypoint": "runtime/managed-service.json"
+  },
+  "permissions": ["network"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "ea7cf7b10b0ba6109f1a60875c56f41870d0ed23bd9c048f0ef638144c37fd93",
+    "CHANGELOG.md": "5b706fe3acab1f39ac4fc6ff846686f59c05b2d42b5f7e2647af4126027a5de9",
+    "config.schema.json": "c2e0cd4ad97d738d67cddadea22e07fe728b6b021a8ba9b18484df4eb56f8a4a",
+    "MIGRATION.md": "e30e63bdd3af3e8c2de8b265676d6462a9e35b4db49bc0859701f903c569115f",
+    "PERMISSIONS.md": "becbc07cfdbb38bb6235b7cf8d3cd7fea5b4164fd5c1084a816acb9368a2fe95",
+    "README.md": "264c19607f3db6f51ac748118be14623c65ad881c2cef6729894791275dbfd14",
+    "runtime/managed-service.json": "0f5c9e5e7df8d1f58446b6be15bd0cb3297b4a1b31edd6daa753c7fb9d9c4d0c",
+    "ui.schema.json": "6209f1ff03697f7e28db078cb79b63873a415b0d802605efb6442ceb78337d9a"
+  }
+}

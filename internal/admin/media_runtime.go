@@ -134,6 +134,8 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 		// Serialize account creation with the global update barrier, so a new
 		// worker cannot appear between the snapshot and draining its peers.
 		if s.accounts != nil {
+			s.accounts.lifecycle.Lock()
+			defer s.accounts.lifecycle.Unlock()
 			s.accounts.mu.Lock()
 			defer s.accounts.mu.Unlock()
 		}
@@ -156,7 +158,9 @@ func (s *Server) mediaRuntimeRoutes(mux *http.ServeMux) {
 			m.mu.Lock()
 			m.drainTicket = ticket
 			m.renewDrainLocked()
-			m.status.State = "draining"
+			if !m.config.ConnectionPaused {
+				m.status.State = "draining"
+			}
 			m.mu.Unlock()
 		}
 		respond(w, 200, map[string]any{"ticket": ticket, "status": "draining", "accounts": len(managers)})

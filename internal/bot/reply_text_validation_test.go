@@ -2,11 +2,28 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/sending"
 )
+
+func TestPausedConnectionKeepsPreparedDeliveryAndResumesOriginalKey(t *testing.T) {
+	w, _, n, in, _ := memberReplyTextFixture(t)
+	row := &delivery{Trace: in.TraceID, Thread: in.Thread, Input: in, Text: "Beta，晚安。", Key: "original-key", State: "prepared"}
+	w.runtime.Deliveries = []*delivery{row}
+	w.config.BeforeSubmit = func(context.Context) error { return errors.New("paused") }
+	if _, err := w.submitDelivery(t.Context(), n, row, true); !errors.Is(err, sending.ErrOutcomeUnknown) || row.State != "prepared" || len(n.submissions) != 0 {
+		t.Fatal("paused worker lost its prepared intent or submitted it", row.State, err)
+	}
+	w.config.BeforeSubmit = nil
+	if _, err := w.submitDelivery(t.Context(), n, row, true); err != nil || row.State != "accepted" ||
+		len(n.submissions) != 1 || n.submissions[0].IdempotencyKey != row.Key {
+		t.Fatal("resume did not submit the retained intent", row.State, err, n.submissions)
+	}
+}
 
 func memberReplyTextFixture(t *testing.T) (*Worker, *companion.Engine, *acceptingProgressNative, companion.Input, *planReviewModel) {
 	t.Helper()

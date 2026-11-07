@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 	"wechat-bot/internal/agentrun"
+	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -30,7 +31,14 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 			if w.readMediaBeforeDecision(m) {
 				readCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 				summary, err := readMediaWithRecovery(readCtx, m, func(ctx context.Context, current linuxnative.Message) (string, error) {
-					text, evidence, err := analyzeMediaWithEvidence(ctx, w.config.Analyzer, current)
+					var text string
+					var evidence MediaObservationEvidence
+					var err error
+					if w.hasScopedMedia(current) {
+						text, evidence, err = w.analyzeIncomingMediaEvidence(ctx, current)
+					} else {
+						text, evidence, err = analyzeMediaWithEvidence(ctx, w.config.Analyzer, current)
+					}
 					if err == nil {
 						followupEvidence = evidence
 					}
@@ -69,6 +77,7 @@ func (w *Worker) liveSession(s *generationScheduler, j *generationJob) *agentrun
 				observed.IncomingMedia[i].ObservationVersion = 1
 				observed.IncomingMedia[i].ObservedRange = followupEvidence.ObservedRange
 				observed.IncomingMedia[i].ObservationExcerpt = followupEvidence.Excerpt
+				observed.IncomingMedia[i].ObservationParts = append([]companion.ObservationPart(nil), followupEvidence.Parts...)
 			}
 		}
 		observed.OriginalText = &original
@@ -100,7 +109,7 @@ func (w *Worker) offerGenerationFollowup(j *generationJob, m linuxnative.Message
 	}
 	isText := m.Type == 1 || m.IsQuotedText()
 	if !isText {
-		if w.config.Analyzer == nil || w.config.Options == nil || !w.observationAllowed(m) {
+		if w.config.Options == nil || !w.observationAllowed(m) || w.mediaAnalyzer(context.Background(), m) == nil {
 			return
 		}
 	}

@@ -34,7 +34,8 @@ func TestWindowsBrokerLaunchEnvelope(t *testing.T) {
 		}
 		if len(env) > 0 {
 			var got map[string]string
-			if json.Unmarshal(fields["environment"], &got) != nil || !reflect.DeepEqual(got, env) {
+			expected := map[string]string{"DOCUMENT_RUNTIME_ROOT": WindowsProcessPath(dir)}
+			if json.Unmarshal(fields["environment"], &got) != nil || !reflect.DeepEqual(got, expected) || env["DOCUMENT_RUNTIME_ROOT"] != dir {
 				t.Fatal("missing plugin environment")
 			}
 			delete(fields, "environment")

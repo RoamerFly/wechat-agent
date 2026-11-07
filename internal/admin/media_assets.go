@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
@@ -160,7 +162,7 @@ func inboundFingerprint(msg linuxnative.Message) string {
 	if msg.ID == "" || msg.SenderID == "" || (msg.CreatedAt == "" && msg.ServerID == "") {
 		return ""
 	}
-	return receivedSourceFingerprint(msg, "media.observe")
+	return wechatapp.ReceivedSourceFingerprint(msg, "media.observe")
 }
 
 func (r assetRequest) key() [4]string {

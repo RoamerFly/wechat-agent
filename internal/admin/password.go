@@ -1,19 +1,17 @@
 package admin
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-	"unicode/utf8"
+
+	"wechat-bot/internal/websession"
 )
 
 func validPassword(value string) bool {
-	return len(value) >= 5 && len(value) <= 128 && utf8.ValidString(value) && strings.TrimSpace(value) == value && !strings.ContainsAny(value, "\x00\r\n")
+	return websession.ValidPassword(value)
 }
 
 // Password keeps existing credentials unless the owner changes them. A web-
@@ -56,37 +54,21 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	if !validPassword(input.New) {
+	err := s.auth.ChangePassword(r, input.Current, input.New, func() error {
+		return writePrivate(filepath.Join(s.manager.dir, "admin-password"), []byte(input.New+"\n"))
+	})
+	switch {
+	case errors.Is(err, websession.ErrPassword):
 		fail(w, 400, "新密码应为5至128字节，首尾不能有空白或换行")
-		return
-	}
-	cookie, err := r.Cookie("wechat_admin_session")
-	if err != nil {
-		fail(w, 401, "请重新登录")
-		return
-	}
-	oldHash, newHash := sha256.Sum256([]byte(input.Current)), sha256.Sum256([]byte(input.New))
-	s.mu.Lock()
-	current, exists := s.sessions[cookie.Value]
-	if !exists || time.Now().After(current.Expires) {
-		s.mu.Unlock()
+	case errors.Is(err, websession.ErrSession):
 		fail(w, 401, "会话已失效，请重新登录")
-		return
-	}
-	if subtle.ConstantTimeCompare(oldHash[:], s.passwordHash[:]) != 1 {
-		s.mu.Unlock()
+	case errors.Is(err, websession.ErrCurrent):
 		fail(w, 400, "当前管理密码不正确")
-		return
-	}
-	if err = writePrivate(filepath.Join(s.manager.dir, "admin-password"), []byte(input.New+"\n")); err != nil {
-		s.mu.Unlock()
+	case err != nil:
 		fail(w, 500, "新密码未能保存，原密码仍然有效")
-		return
+	default:
+		s.auth.ClearCookie(w, r)
+		s.manager.log("admin_password_changed")
+		respond(w, 200, map[string]bool{"ok": true, "reauthenticate": true})
 	}
-	s.passwordHash = newHash
-	s.sessions = map[string]session{}
-	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "wechat_admin_session", Path: "/", Value: "", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
-	s.manager.log("admin_password_changed")
-	respond(w, 200, map[string]bool{"ok": true, "reauthenticate": true})
 }

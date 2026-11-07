@@ -840,3 +840,142 @@ func TestCompleteChunkReceiptsNormalizeAcceptedParentStatus(t *testing.T) {
 		t.Fatal("complete voice receipts not normalized", d, n.sends)
 	}
 }
+
+type scopedMediaFake struct {
+	*mediaFake
+	loseReply bool
+}
+
+func (n scopedMediaFake) Submit(ctx context.Context, req linuxnative.ToolSend) (linuxnative.ToolStatus, error) {
+	status, err := n.mediaFake.Submit(ctx, req)
+	status.AccountID, status.Kind = "test", "send"
+	n.status = status
+	if n.loseReply {
+		return linuxnative.ToolStatus{}, errors.New("synthetic submission response lost")
+	}
+	return status, err
+}
+
+func TestScopedMediaUsesOriginalJobAcrossUnknownReceiptAndCancellation(t *testing.T) {
+	for _, latePart := range []bool{false, true} {
+		t.Run(fmt.Sprint(latePart), func(t *testing.T) {
+			w, n, c, in := mediaWorker(t)
+			w.sender = scopedMediaFake{mediaFake: n, loseReply: true}
+			w.config.AuthorizeMedia = func(request companion.Input) bool {
+				return request.Account == in.Account && request.Thread == in.Thread
+			}
+			staged := 0
+			w.config.PrepareMediaSource = func(_ context.Context, request companion.Input, kind, asset string) (string, error) {
+				staged++
+				if request.TraceID != in.TraceID || kind != "voice" || asset != "original" {
+					return "", errors.New("upload received wrong request identity")
+				}
+				return "verified-upload", nil
+			}
+			media := companion.GeneratedMedia{ID: "prepared-voice", AssetID: "original", Kind: "voice"}
+			w.queueMedia(t.Context(), c, in, media)
+			if w.mediaPreparation == nil || n.sends != 0 {
+				t.Fatal("staging did not defer the submit")
+			}
+			select {
+			case prepared := <-w.mediaPreparation.result:
+				w.mediaPreparation.result <- prepared
+			case <-time.After(5 * time.Second):
+				t.Fatal("staging did not finish")
+			}
+			w.reconcileMedia(t.Context())
+			d := w.runtime.Media[0]
+			if staged != 1 || n.sends != 1 || d.State != "checking_receipt" || d.SourceID != "verified-upload" {
+				t.Fatal("did not checkpoint unknown submission", staged, n.sends, d.State)
+			}
+			key := d.Key
+			if err := w.loadRuntime("server-1"); err != nil {
+				t.Fatal(err)
+			}
+			d = w.runtime.Media[0]
+			n.lookupErrs = []error{linuxnative.ErrToolNotFound}
+			d.Next = time.Time{}
+			w.reconcileMedia(t.Context())
+			if d.State != "checking_receipt" || n.sends != 1 || d.Key != key {
+				t.Fatal("absent lookup repeated submission", d.State, n.sends)
+			}
+			n.status.VoiceChunks = []linuxnative.VoiceChunkStatus{
+				{Index: 0, State: "accepted", HasReceipt: true, ServerID: "123", DurationMS: 60000},
+				{Index: 1, State: "cancelled", DurationMS: 60000},
+				{Index: 2, State: "cancelled", DurationMS: 10000},
+			}
+			if latePart {
+				n.status.VoiceChunks[1].State = "submitting"
+			}
+			interrupt := fixtureMessage("stop", in.Thread, "发错了，不是这首", "incoming")
+			interrupt.SenderID = in.Sender
+			n.lookupErrs = []error{linuxnative.ErrToolNotFound, linuxnative.ErrToolNotFound}
+			if !w.stopRequestedVoice(t.Context(), interrupt) || !d.UserCancelled || d.State != "cancelling" || n.cancels != 0 {
+				t.Fatal("cancel was not retained while its native job was still undiscoverable", d.State, n.cancels)
+			}
+			d.Next = time.Time{}
+			w.reconcileMedia(t.Context())
+			if d.State != "cancelling" || time.Until(d.Next) > 2*time.Second || n.sends != 1 {
+				t.Fatal("late native cancel target was not checked promptly", d.State, d.Next, n.sends)
+			}
+			d.Next = time.Time{}
+			w.reconcileMedia(t.Context())
+			if n.cancels != 1 || d.ID != "job-test" {
+				t.Fatal("cancel did not locate original job by key", n.cancels, d.State)
+			}
+			d.Next = time.Time{}
+			w.reconcileMedia(t.Context())
+			if latePart {
+				if d.State != "cancelling" {
+					t.Fatal("in-flight second segment was treated as cancelled", d.State)
+				}
+				n.status.VoiceChunks[1].State = "accepted"
+				n.status.VoiceChunks[1].HasReceipt, n.status.VoiceChunks[1].ServerID = true, "124"
+				d.Next = time.Time{}
+				w.reconcileMedia(t.Context())
+			}
+			if d.State != "stopped" || !d.Status.VoiceChunks[0].HasReceipt || d.Status.VoiceChunks[1].HasReceipt != latePart || d.Status.VoiceChunks[2].State != "cancelled" {
+				t.Fatal("partial receipts or pending cancellation lost", d.State, d.Status.VoiceChunks)
+			}
+			w.queueMedia(t.Context(), c, in, media)
+			if staged != 1 || n.sends != 1 || n.retries != 0 {
+				t.Fatal("cancelled delivery revived", staged, n.sends, n.retries)
+			}
+		})
+	}
+}
+
+func TestScopedMediaStopDuringUploadDiscardsLateStaging(t *testing.T) {
+	w, n, c, in := mediaWorker(t)
+	started := make(chan struct{})
+	w.config.PrepareMediaSource = func(ctx context.Context, _ companion.Input, _, _ string) (string, error) {
+		close(started)
+		<-ctx.Done()
+		return "late-native-source", nil
+	}
+	media := companion.GeneratedMedia{ID: "prepared-voice", AssetID: "original", Kind: "voice"}
+	w.queueMedia(t.Context(), c, in, media)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not start")
+	}
+	interrupt := fixtureMessage("stop", in.Thread, "后面别发了", "incoming")
+	interrupt.SenderID = in.Sender
+	if !w.stopRequestedVoice(t.Context(), interrupt) {
+		t.Fatal("worker could not accept stop during upload")
+	}
+	select {
+	case <-w.mediaPreparation.result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not observe cancellation")
+	}
+	if err := w.loadRuntime("server-1"); err != nil {
+		t.Fatal(err)
+	}
+	w.reconcileMedia(t.Context())
+	w.queueMedia(t.Context(), c, in, media)
+	if n.sends != 0 || n.cancels != 0 || w.runtime.Media[0].State != "stopped" {
+		t.Fatal("stopping during staging submitted a native job", n.sends, n.cancels, w.runtime.Media[0].State)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 	"wechat-bot/internal/agentrun"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/mcptools"
@@ -92,5 +93,50 @@ func TestGenerationReviewForkPreservesCallbacksAndIsolatesTrace(t *testing.T) {
 	}
 	if (&generationTools{inner: generatedTools{}}).ForkTools() != nil {
 		t.Fatal("mutable wrapper manufactured a shared fallback fork")
+	}
+}
+
+type ephemeralGenerationProbe struct{ backgroundCapabilityProbe }
+
+func (*ephemeralGenerationProbe) EphemeralToolResult(name string) bool {
+	return name == "fixture_authorized_history"
+}
+
+func TestGenerationEphemeralToolUsesLiveGateWithoutCheckpoint(t *testing.T) {
+	w, _, _ := backgroundWorker(t, &backgroundCapabilityModel{})
+	w.enableGenerations()
+	defer w.closeGenerations()
+
+	const name = "fixture_authorized_history"
+	args := json.RawMessage(`{"page":1}`)
+	in := companion.Input{Thread: "filehelper", TraceID: "ephemeral-history"}
+	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("ephemeral-event", in.TraceID, in.Thread, "incoming", "remote")}}
+	job := &generationJob{input: in}
+	job.input.RecoveryToolResults = []companion.RecoveryToolResult{{Tool: name, CallKey: generationToolCallKey(name, args), Result: "stale-content"}}
+	probe := &ephemeralGenerationProbe{}
+	tools := &generationTools{inner: probe, worker: w, scheduler: w.generation, job: job}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	type outcome struct {
+		value string
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		value, err := tools.Call(ctx, name, args)
+		done <- outcome{value, err}
+	}()
+	for {
+		select {
+		case request := <-w.generation.requests:
+			w.runGenerationRequest(request)
+		case result := <-done:
+			if result.err != nil || result.value != `{"state":"read"}` || probe.count != 1 || len(w.runtime.Inbox[0].RecoveryTools) != 0 {
+				t.Fatal("ephemeral result was replayed or persisted", result, probe.count)
+			}
+			return
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 	}
 }

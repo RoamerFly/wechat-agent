@@ -38,7 +38,8 @@ func (m *Manager) newBoundMediaTranscriptionPolicy(ctx context.Context, wav []by
 	// Include the exact audio binding in the outer job identity. The plugin
 	// still receives only the opaque reference; bytes never leave the host
 	// except through the already-bound model/local service callback.
-	inv.RequestKey = "bound-media-transcription-" + agentID(inv.RequestKey, p.ref.SHA, strconv.Itoa(p.ref.Version), strconv.Itoa(p.configRevision))
+	ref := p.Reference()
+	inv.RequestKey = "bound-media-transcription-" + agentID(inv.RequestKey, ref.SHA, strconv.Itoa(ref.Version), strconv.Itoa(p.ConfigRevision()))
 	p.invocationValue = inv
 	p.originCheck = func(ctx context.Context, _ pluginhost.Job, _ pluginhost.Capability) error {
 		if m.native.Account() != inv.Account {

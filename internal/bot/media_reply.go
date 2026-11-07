@@ -135,6 +135,9 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		if c.Config.ShowAILabel && !strings.HasPrefix(text, "[AI]") {
 			text = "[AI] " + text
 		}
+		if w.beforeSubmit(ctx) != nil {
+			return
+		}
 		r.State = "sending_text"
 		w.persistErr = w.saveRuntime()
 		if w.persistErr != nil {
@@ -144,7 +147,11 @@ func (w *Worker) reconcileMediaReplies(ctx context.Context) {
 		_, err := w.sendText(sendCtx, in, r.Index, text)
 		cancel()
 		if err != nil {
-			if errors.Is(err, sending.ErrOutcomeUnknown) {
+			if errors.Is(err, errSubmissionDeferred) {
+				r.State = "waiting_text"
+				w.persistErr = w.saveRuntime()
+				return
+			} else if errors.Is(err, sending.ErrOutcomeUnknown) {
 				r.Next = time.Now().Add(5 * time.Second)
 			} else {
 				r.State = "stopped"

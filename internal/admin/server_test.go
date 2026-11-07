@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"wechat-bot/internal/devicebroker"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sending"
 )
@@ -63,7 +64,7 @@ func setup(t *testing.T) *webFixture {
 	t.Helper()
 	native := &fakeNative{}
 	dir := t.TempDir()
-	m, err := NewManager(dir, "", native)
+	m, err := NewManagerWithDeviceIO(dir, "", native, devicebroker.Host{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,10 +200,14 @@ func TestAuthCSRFKeyRedactionAndPersistentSettings(t *testing.T) {
 
 func TestAssetsSecurityHeadersAndLoginCoalescing(t *testing.T) {
 	f := setup(t)
-	for _, path := range []string{"/", "/assets/app.js", "/assets/app.css", "/assets/theme.js", "/assets/whale-girl.png", "/assets/whale-girl-cutout.png", "/assets/life-journal.js", "/assets/night-sea.webp", "/assets/palace.js", "/assets/palace-graph.js", "/assets/palace-graph.css"} {
+	for _, path := range []string{"/", "/local-home", "/assets/app.js", "/assets/app.css", "/assets/theme.js", "/assets/whale-girl.png", "/assets/whale-girl-cutout.png", "/assets/life-journal.js", "/assets/night-sea.webp", "/assets/palace.js", "/assets/palace-graph.js", "/assets/palace-graph.css"} {
 		code, data, response := f.request("GET", path, nil, false, false)
 		if code != 200 || len(data) == 0 || !strings.Contains(response.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 			t.Fatalf("asset/header failure %s", path)
+		}
+		if path == "/" && !bytes.Contains(data, []byte("/assets/app.css")) ||
+			path == "/local-home" && !bytes.Contains(data, []byte("/assets/local-home.css")) {
+			t.Fatalf("wrong HTML shell for %s", path)
 		}
 		if strings.HasSuffix(path, ".webp") && (response.Header.Get("Content-Type") != "image/webp" || len(data) < 12 || string(data[8:12]) != "WEBP") {
 			t.Fatalf("journal illustration was not served as WebP")

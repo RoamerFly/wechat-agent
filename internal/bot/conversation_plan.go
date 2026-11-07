@@ -312,6 +312,9 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		if p.Quote != nil {
 			in.QuoteServerID = p.Quote.ServerID
 		}
+		if w.beforeSubmit(ctx) != nil {
+			return
+		}
 		p.State = "submitting"
 		w.persistErr = w.saveRuntime()
 		if w.persistErr != nil {
@@ -325,6 +328,10 @@ func (w *Worker) reconcileUtterancePlans(ctx context.Context) {
 		cancel()
 		if err == nil {
 			w.acceptPlanBubble(c, p, text)
+		} else if errors.Is(err, errSubmissionDeferred) {
+			p.State = "queued"
+			w.persistErr = w.saveRuntime()
+			return
 		} else if errors.Is(err, sending.ErrOutcomeUnknown) {
 			p.State = "waiting_receipt"
 			p.Next = time.Now().Add(time.Second)

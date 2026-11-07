@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"wechat-bot/internal/bot"
@@ -119,5 +120,36 @@ func TestVideoRetryReusedLocatorResolvesCurrentShare(t *testing.T) {
 	n.message.ServerID = "203"
 	if b, _, err := p.inspectionSource(t.Context(), &source); err == nil || len(b) != 0 {
 		t.Fatal("a different server message matched the same timestamp")
+	}
+}
+
+type replacedChannelsNative struct {
+	*forwardNative
+	source  linuxnative.ChannelsSource
+	lookups []string
+}
+
+func (n *replacedChannelsNative) ChannelsMedia(_ context.Context, id string) (linuxnative.ChannelsSource, error) {
+	n.lookups = append(n.lookups, id)
+	return n.source, nil
+}
+
+func TestVideoInspectionRejectsOlderChannelsCardFromSameRoom(t *testing.T) {
+	f, p, native := forwardFixture(t)
+	defer p.hub.Close()
+	f.manager.config.Behavior.ReadVideos = true
+	kind := 51
+	native.message = linuxnative.Message{ID: "target-card", AccountID: "test", ThreadID: "source@chatroom", SenderID: "member", Direction: "incoming", Type: 49, AppMessageType: &kind}
+	channels := &replacedChannelsNative{forwardNative: native, source: linuxnative.ChannelsSource{AccountID: "test", ThreadID: "source@chatroom", MessageID: "older-card", ObjectID: "101", State: "available", MediaURL: "https://invalid.example/synthetic"}}
+	f.manager.native = channels
+	for range 2 {
+		in := videoInspectionInput{Message: native.message.ID}
+		data, _, err := p.inspectionSource(t.Context(), &in)
+		if err == nil || err.Error() != "channels_source_scope_mismatch" || len(data) != 0 {
+			t.Fatal("read accepted a locator for another message", err)
+		}
+	}
+	if !slices.Equal(channels.lookups, []string{"target-card", "target-card"}) {
+		t.Fatal("retry retargeted native reads", channels.lookups)
 	}
 }

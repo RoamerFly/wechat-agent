@@ -42,6 +42,7 @@ type mediaDelivery struct {
 	CancelledAt        time.Time              `json:"cancelled_at,omitempty"`
 	StateVersion       int                    `json:"state_version,omitempty"`
 	ResumedFrom        string                 `json:"resumed_from,omitempty"`
+	ResumeOriginID     string                 `json:"resume_origin_id,omitempty"`
 	OriginInput        *companion.Input       `json:"origin_input,omitempty"`
 	VoiceProfile       string                 `json:"voice_profile_id,omitempty"`
 	VoiceID            string                 `json:"voice_id,omitempty"`
@@ -68,6 +69,7 @@ type mediaDelivery struct {
 	Input              companion.Input        `json:"input"`
 	SourceID           string                 `json:"source_id"`
 	AssetID            string                 `json:"asset_id,omitempty"`
+	DeferredSource     bool                   `json:"deferred_source,omitempty"`
 	Kind               string                 `json:"kind"`
 	Title              string                 `json:"title"`
 	ID                 string                 `json:"id"`
@@ -85,6 +87,28 @@ type mediaDelivery struct {
 
 func (d *mediaDelivery) terminal() bool {
 	return d.State == "accepted" || d.State == "stopped" || d.State == "needs_review"
+}
+
+func (d *mediaDelivery) matchesNative(s linuxnative.ToolStatus) bool {
+	if d.ResumeOriginID != "" && (s.ID == d.ResumeOriginID || s.SourceID != d.SourceID) {
+		return false
+	}
+	if s.ID == "" || d.ID != "" && d.ID != s.ID || s.ThreadID != d.Input.Thread || s.SourceID != "" && s.SourceID != d.SourceID {
+		return false
+	}
+	return !d.DeferredSource || s.AccountID == d.Input.Account && d.SourceID != "" && s.SourceID == d.SourceID && (s.Kind == "send" || s.Kind == d.Kind)
+}
+
+func (d *mediaDelivery) unconfirmedVoiceParts() bool {
+	if !d.DeferredSource || d.Kind != "voice" {
+		return false
+	}
+	for _, part := range d.Status.VoiceChunks {
+		if part.State == "submitting" || part.State == "needs_review" {
+			return true
+		}
+	}
+	return d.Status.VoicePartsIncomplete
 }
 func (w *Worker) draining() bool { return w.config.Draining != nil && w.config.Draining() }
 func awaitingMediaReceipt(d *mediaDelivery) bool {
@@ -113,7 +137,7 @@ func (w *Worker) checkMediaReceipt(ctx context.Context, n mediaNative, d *mediaD
 		s, err = n.LookupSend(ctx, d.Key)
 	}
 	if err == nil {
-		if s.ID == "" || d.ID != "" && d.ID != s.ID || s.ThreadID != d.Input.Thread || s.SourceID != "" && s.SourceID != d.SourceID {
+		if !d.matchesNative(s) {
 			d.State, d.Reason = "needs_review", "media_identity_mismatch"
 			w.mediaRecord(d, "media_stopped", "error")
 			return
@@ -126,6 +150,10 @@ func (w *Worker) checkMediaReceipt(ctx context.Context, n mediaNative, d *mediaD
 			s.VoiceChunks, s.VoicePartsIncomplete = d.Status.VoiceChunks, true
 		}
 		d.ID, d.Status, d.Phase = s.ID, s, s.Phase
+		if d.DeferredSource && !w.mediaAllowed(d) && (s.State == "queued" || s.State == "running" || s.State == "submitting") {
+			w.cancelMedia(n, d, true, "media_permission_or_quiet_changed")
+			return
+		}
 		switch s.State {
 		case "accepted":
 			if s.ServerID != "" {
@@ -213,6 +241,14 @@ func (w *Worker) pendingMedia() bool {
 	return false
 }
 func (w *Worker) mediaAllowed(d *mediaDelivery) bool {
+	in := d.Input
+	in.TraceID = d.Trace
+	if w.config.AuthorizeMediaAsset != nil && !w.config.AuthorizeMediaAsset(in, d.Kind, d.AssetID) {
+		return false
+	}
+	if w.config.AuthorizeMedia != nil && !w.config.AuthorizeMedia(d.Input) {
+		return false
+	}
 	routeAllowed := w.allowed[d.Input.Thread]
 	if d.CrossRequester != "" {
 		if w.config.MediaSeedAllowed == nil || !w.config.MediaSeedAllowed(MediaSeed{OriginInput: d.OriginInput, Key: d.Key, Trace: d.Trace, SourceID: d.SourceID, Input: d.Input, Requester: d.CrossRequester, OriginThread: d.CrossOrigin, SourceThread: d.CrossSource, OriginTask: d.CrossTask}) {
@@ -249,11 +285,25 @@ func (w *Worker) mediaTraceCancelled(trace string) bool {
 	return false
 }
 
+func (w *Worker) retryUncertainMedia(d *mediaDelivery) bool {
+	return d.ResumedFrom == "" && !d.DeferredSource && w.config.Options.RetryUncertain
+}
+
 func (w *Worker) mediaRetryDelay() int {
 	if w.config.Options == nil {
 		return 0
 	}
 	return w.config.Options.RetryDelaySeconds
+}
+
+func (w *Worker) mediaCancelDelay(d *mediaDelivery) time.Duration {
+	delay := deliveryBackoff(w.mediaRetryDelay(), d.Checks)
+	if d.DeferredSource && d.UserCancelled {
+		// A late native job may already be pacing a following voice part.
+		// Keep seeking the original cancellation target before normal backoff.
+		delay = min(delay, 2*time.Second)
+	}
+	return delay
 }
 
 func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input companion.Input, m companion.GeneratedMedia) bool {
@@ -266,6 +316,7 @@ func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input comp
 		return true
 	}
 	source := m.SourceID
+	deferred := source == "" && w.config.PrepareMediaSource != nil
 	if source == "" {
 		source = m.ID
 	}
@@ -289,6 +340,9 @@ func (w *Worker) queueMedia(ctx context.Context, c *companion.Engine, input comp
 		return true
 	}
 	d := &mediaDelivery{VoiceProfile: m.VoiceProfile, VoiceID: m.VoiceID, VoiceEngine: m.VoiceEngine, SynthesisText: m.SynthesisText, SynthesisTextKnown: m.SynthesisTextKnown, ParentAssetID: m.ParentAssetID, CachedMIME: m.CachedMIME, DurationMS: m.DurationMS, URL: m.URL, Description: m.Description, Key: key, Trace: input.TraceID, Input: input, SourceID: source, AssetID: m.AssetID, Kind: m.Kind, Title: m.Title, State: "prepared", Created: time.Now().UTC()}
+	if deferred {
+		d.DeferredSource, d.SourceID = true, ""
+	}
 	if bound, err := w.prepareMediaEvidence(ctx, input); err != nil {
 		// The native journal might already contain this deterministic key after
 		// a lost checkpoint. Always reconcile that receipt before stopping a
@@ -402,6 +456,18 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		if d.Paused || d.terminal() || time.Now().Before(d.Next) {
 			continue
 		}
+		if d.ResumedFrom != "" && d.ID == "" && !d.UserCancelled {
+			if d.State == "resume_prepared" {
+				if resumeNative, ok := w.sender.(resumeMissingMediaNative); ok {
+					w.submitMissingMedia(ctx, resumeNative, d)
+				}
+			} else {
+				// An uncertain continuation is read by its NEW key. It must never
+				// fall through to Submit, which would send the full original source.
+				w.checkMediaReceipt(ctx, n, d)
+			}
+			continue
+		}
 		// A user cancellation is a one-way delivery fence.  In particular, a
 		// lost native response may leave ID empty while State is submitting or
 		// cancelling; lookup is allowed solely to settle/cancel the original
@@ -411,7 +477,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			status, err := n.LookupSend(lookupCtx, d.Key)
 			cancel()
 			if err != nil {
-				if errors.Is(err, linuxnative.ErrToolNotFound) {
+				if errors.Is(err, linuxnative.ErrToolNotFound) && !d.DeferredSource {
 					d.State, d.Reason = "stopped", "media_cancelled_before_native_submission"
 					d.Next = time.Time{}
 					w.mediaRecord(d, "media_stopped", "decision")
@@ -419,15 +485,15 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				} else {
 					d.State, d.Reason = "cancelling", "media_cancel_lookup_pending"
 					d.Checks++
-					d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+					d.Next = time.Now().Add(w.mediaCancelDelay(d))
 					w.mediaRecord(d, "media_cancel_lookup_pending", "decision")
 				}
 				continue
 			}
-			if status.ID == "" || status.ThreadID != d.Input.Thread || status.SourceID != "" && status.SourceID != d.SourceID {
+			if !d.matchesNative(status) {
 				d.State, d.Reason = "cancelling", "media_cancel_identity_pending"
 				d.Checks++
-				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+				d.Next = time.Now().Add(w.mediaCancelDelay(d))
 				w.mediaRecord(d, "media_cancel_lookup_pending", "error")
 				continue
 			}
@@ -442,7 +508,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				w.cancelMedia(n, d, true, "media_cancel_requested_by_user")
 				continue
 			}
-			if d.Status.State == "unknown" || d.Status.State == "needs_review" {
+			if d.Status.State == "unknown" || d.Status.State == "needs_review" || d.unconfirmedVoiceParts() {
 				d.State, d.Reason = "cancelling", "media_cancel_receipt_pending"
 				d.Checks++
 				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
@@ -464,7 +530,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			w.mediaRecord(d, "media_stopped", "decision")
 			continue
 		}
-		if (d.State == "checking_receipt" || d.State == "submitting" && !w.config.Options.RetryUncertain) && !d.UserCancelled {
+		if (d.State == "checking_receipt" || d.State == "submitting" && !w.retryUncertainMedia(d)) && !d.UserCancelled {
 			w.checkMediaReceipt(ctx, n, d)
 			continue
 		}
@@ -522,6 +588,10 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		} else {
 			status, err = n.LookupSend(checkCtx, d.Key)
 			if errors.Is(err, linuxnative.ErrToolNotFound) {
+				if w.beforeSubmit(checkCtx) != nil {
+					cancel()
+					return
+				}
 				if !w.mediaAllowed(d) {
 					cancel()
 					w.cancelMedia(n, d, false, "media_permission_or_quiet_changed")
@@ -533,7 +603,12 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 					w.mediaRecord(d, "media_stopped", "error")
 					continue
 				}
-				if proofErr := w.validateMediaEvidence(checkCtx, d); proofErr != nil {
+				proofErr := w.validateMediaEvidence(checkCtx, d)
+				if w.beforeSubmit(checkCtx) != nil {
+					cancel()
+					return
+				}
+				if proofErr != nil {
 					cancel()
 					d.State, d.Reason = "needs_review", "media_source_proof_invalid"
 					w.mediaRecord(d, "media_stopped", "error")
@@ -545,31 +620,57 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 					w.persistErr = w.saveRuntime()
 					continue
 				}
+				if d.DeferredSource && d.SourceID == "" {
+					cancel()
+					if !w.stageMediaSource(ctx, d) {
+						continue
+					}
+					checkCtx, cancel = context.WithTimeout(ctx, 8*time.Second)
+				}
 				// Persist before sending; a lost HTTP response is recovered using this
 				// same idempotency key, never by creating a different send request.
 				d.State = "submitting"
 				w.advanceSendGate(d.Input.Thread)
 				w.persistErr = w.saveRuntime()
 				if w.persistErr == nil {
-					status, err = n.Submit(checkCtx, linuxnative.ToolSend{URL: d.URL, Title: d.Title, Description: d.Description, ThreadID: d.Input.Thread, Kind: d.Kind, SourceID: d.SourceID, IdempotencyKey: d.Key})
+					if d.DeferredSource && w.beforeSubmit(checkCtx) != nil {
+						d.State = "prepared" // The native call was never entered.
+						w.persistErr = w.saveRuntime()
+						cancel()
+						return
+					}
+					status, err = w.submitMedia(checkCtx, n, d)
+					if errors.Is(err, errMediaAuthorityChanged) {
+						d.State, d.Reason = "stopped", "media_source_or_authorization_changed"
+						w.mediaRecord(d, "media_stopped", "error")
+						w.refreshMediaParent(d.Trace)
+						cancel()
+						continue
+					}
+					if errors.Is(err, ErrDeliveryCancelled) {
+						d.State = "prepared" // Gate proves the native call was not entered.
+						w.cancelMedia(n, d, true, "media_cancelled_before_native_submission")
+						cancel()
+						continue
+					}
 				}
 			}
 		}
 		cancel()
 		d.Next = time.Now().Add(2 * time.Second)
 		if err != nil {
-			if !w.config.Options.RetryUncertain && (d.ID != "" || d.State == "submitting") && !d.UserCancelled {
+			if !w.retryUncertainMedia(d) && (d.ID != "" || d.State == "submitting") && !d.UserCancelled {
 				w.awaitMediaReceipt(d)
 				continue
 			} else {
 				d.Reason = "media_receipt_lookup_pending"
 				d.Checks++
-				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
+				d.Next = time.Now().Add(w.mediaCancelDelay(d))
 			}
 			w.mediaRecord(d, "media_waiting", "decision")
 			continue
 		}
-		if status.ThreadID != d.Input.Thread || status.SourceID != "" && status.SourceID != d.SourceID {
+		if !d.matchesNative(status) {
 			d.State = "needs_review"
 			d.Reason = "media_identity_mismatch"
 			w.mediaRecord(d, "media_stopped", "error")
@@ -592,7 +693,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			continue
 		}
 		if status.State == "accepted" {
-			if !w.config.Options.RetryUncertain && !d.UserCancelled {
+			if !w.retryUncertainMedia(d) && !d.UserCancelled {
 				w.awaitMediaReceipt(d)
 				continue
 			}
@@ -608,7 +709,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		if d.UserCancelled {
 			if status.State == "queued" || status.State == "running" || status.State == "submitting" {
 				w.cancelMedia(n, d, true, "media_cancel_requested_by_user")
-			} else if status.State == "unknown" || status.State == "needs_review" {
+			} else if status.State == "unknown" || status.State == "needs_review" || d.unconfirmedVoiceParts() {
 				d.State, d.Reason = "cancelling", "media_cancel_receipt_pending"
 				d.Checks++
 				d.Next = time.Now().Add(deliveryBackoff(w.mediaRetryDelay(), d.Checks))
@@ -624,7 +725,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		switch status.State {
 		case "failed", "cancelled":
 			d.Reason = status.Reason
-			if status.Retryable && w.config.Options.RetryUncertain {
+			if status.Retryable && w.retryUncertainMedia(d) {
 				if d.State != "retry_wait" {
 					d.State = "retry_wait"
 					d.Checks = 0
@@ -642,6 +743,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 							d.State, d.Reason = "needs_review", "media_source_proof_invalid"
 							w.mediaRecord(d, "media_stopped", "error")
 							continue
+						}
+						if w.beforeSubmit(ctx) != nil {
+							return
 						}
 						d.Retries++
 						d.State = "retry_submitting"
@@ -671,7 +775,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				w.refreshMediaParent(d.Trace)
 			}
 		case "needs_review", "unknown":
-			if !w.config.Options.RetryUncertain {
+			if !w.retryUncertainMedia(d) {
 				w.awaitMediaReceipt(d)
 				continue
 			}
@@ -693,7 +797,7 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 			// Explicit retry policy accepts that a delayed sync may hide delivery.
 			if retry, ok := w.sender.(interface {
 				ReconcileMediaJob(context.Context, string) (linuxnative.ToolStatus, error)
-			}); ok && w.config.Options.RetryUncertain && d.Checks > 0 {
+			}); ok && w.retryUncertainMedia(d) && d.Checks > 0 {
 				if proofErr := w.validateMediaEvidence(ctx, d); proofErr != nil {
 					// An uncertain native result may still become accepted. Keep
 					// polling its original receipt, but never resume an upload whose
@@ -706,6 +810,9 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 				if gate := w.sendGate(d.Input.Thread); time.Now().Before(gate) {
 					d.Next = gate
 					continue
+				}
+				if w.beforeSubmit(ctx) != nil {
+					return
 				}
 				w.advanceSendGate(d.Input.Thread)
 				retryCtx, stop := context.WithTimeout(ctx, 30*time.Second)
@@ -753,6 +860,70 @@ func (w *Worker) reconcileMedia(ctx context.Context) {
 		}
 	}
 	w.persistErr = w.saveRuntime()
+}
+
+type mediaPreparation struct {
+	key     string
+	cancel  context.CancelFunc
+	result  chan string
+	discard bool
+}
+
+func (w *Worker) stopMediaPreparation(key string) {
+	if p := w.mediaPreparation; p != nil && (key == "" || p.key == key) {
+		p.discard = true
+		p.cancel()
+	}
+}
+
+// Upload runs outside the event loop so an unrelated large file cannot delay
+// an inbound stop for a voice job. Keep at most one native staging upload per
+// worker; native staging may buffer the input before it becomes a source.
+func (w *Worker) stageMediaSource(ctx context.Context, d *mediaDelivery) bool {
+	if w.config.PrepareMediaSource == nil {
+		d.State, d.Reason = "stopped", "media_source_preparation_unavailable"
+		w.mediaRecord(d, "media_stopped", "error")
+		return false
+	}
+	if p := w.mediaPreparation; p != nil {
+		if p.key != d.Key && !p.discard {
+			return false
+		}
+		select {
+		case source := <-p.result:
+			w.mediaPreparation = nil
+			if !p.discard {
+				if ctx.Err() != nil || w.beforeSubmit(ctx) != nil {
+					return false
+				}
+				if source == "" {
+					d.State, d.Reason = "stopped", "media_verified_upload_failed"
+					w.mediaRecord(d, "media_stopped", "error")
+					return false
+				}
+				d.SourceID = source
+				w.persistErr = w.saveRuntime()
+				return w.persistErr == nil
+			}
+		default:
+			return false
+		}
+	}
+	prepareCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	p := &mediaPreparation{key: d.Key, cancel: cancel, result: make(chan string, 1)}
+	w.mediaPreparation = p
+	in := d.Input
+	in.TraceID = d.Trace
+	prepare, kind, asset := w.config.PrepareMediaSource, d.Kind, d.AssetID
+	go func() {
+		defer cancel()
+		source, err := prepare(prepareCtx, in, kind, asset)
+		if err != nil || prepareCtx.Err() != nil {
+			source = ""
+		}
+		p.result <- source
+	}()
+	return false
 }
 func (w *Worker) mediaRecord(d *mediaDelivery, event, category string) {
 	memory := companion.MediaMemory{VoiceProfile: d.VoiceProfile, VoiceID: d.VoiceID, VoiceEngine: d.VoiceEngine, SynthesisText: d.SynthesisText, SynthesisTextKnown: d.SynthesisTextKnown, ParentAssetID: d.ParentAssetID, CachedMIME: d.CachedMIME, URL: d.URL, Key: d.Key, Kind: d.Kind, Title: d.Title, SourceID: d.SourceID, AssetID: d.AssetID, JobID: d.ID, State: d.State, Phase: d.Phase, Reason: d.Reason, Retries: d.Retries, TotalParts: len(d.Status.VoiceChunks)}
@@ -828,6 +999,7 @@ func (w *Worker) refreshMediaParent(trace string) {
 	w.publishTaskDelivery(trace)
 }
 func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason string) {
+	w.stopMediaPreparation(d.Key)
 	wasCancelled := d.UserCancelled
 	d.UserCancelled = d.UserCancelled || user
 	if user && !wasCancelled {
@@ -838,13 +1010,13 @@ func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason 
 		// written but before the native job id reached us.  Do not assume it
 		// was never submitted: discover the original idempotency key and stop
 		// that native job before marking this delivery terminal.
-		if d.State == "submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" || d.State == "checking_receipt" {
+		if d.State == "submitting" || d.State == "resume_submitting" || d.State == "queued" || d.State == "running" || d.State == "waiting" || d.State == "checking_receipt" {
 			lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			status, err := n.LookupSend(lookupCtx, d.Key)
 			cancel()
-			if err == nil && status.ID != "" && status.ThreadID == d.Input.Thread && (status.SourceID == "" || status.SourceID == d.SourceID) {
+			if err == nil && d.matchesNative(status) {
 				d.ID, d.Status, d.Phase = status.ID, status, status.Phase
-			} else if err != nil && !errors.Is(err, linuxnative.ErrToolNotFound) {
+			} else if d.DeferredSource || err != nil && !errors.Is(err, linuxnative.ErrToolNotFound) {
 				d.State, d.Reason, d.Next = "cancelling", reason, time.Now().Add(time.Second)
 				w.persistErr = w.saveRuntime()
 				if w.persistErr == nil {
@@ -878,7 +1050,7 @@ func (w *Worker) cancelMedia(n mediaNative, d *mediaDelivery, user bool, reason 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		s, err := n.CancelMediaJob(ctx, d.ID)
 		cancel()
-		if err == nil {
+		if err == nil && (!d.DeferredSource || d.matchesNative(s)) {
 			d.Status = s
 			d.Phase = s.Phase
 		}
@@ -1137,6 +1309,7 @@ func rejectVoice(text string) bool {
 	return parseVoiceInterrupt(text).stop
 }
 func (w *Worker) suspendMedia() {
+	w.stopMediaPreparation("")
 	if w.runtime == nil || w.draining() && !w.pendingMedia() {
 		return
 	}
@@ -1150,6 +1323,10 @@ func (w *Worker) suspendMedia() {
 	for _, d := range w.runtime.Media {
 		if time.Now().After(deadline) {
 			break
+		}
+		if d.DeferredSource && !d.terminal() && (d.ID != "" || d.State == "checking_receipt" || d.State == "submitting" || d.State == "cancelling") {
+			w.cancelMedia(n, d, true, "media_worker_suspended")
+			continue
 		}
 		if d.State == "checking_receipt" && (d.Status.State == "needs_review" || d.Status.State == "unknown") {
 			continue // No active native upload; preserve the scheduled receipt query.

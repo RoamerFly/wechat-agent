@@ -1,0 +1,11 @@
+package adapter
+
+import "wechat-bot/internal/mcptools"
+
+func StationVideoTool() mcptools.Tool {
+	return tool("wechat_video_read", "Acquire and probe the actual video from a received video message or WeChat Channels card in this conversation. Current or quoted media needs media-read authorization; older messages also need history authorization. Use the returned message_id and private asset_id with wechat_video_observe for visual or audio content. Card metadata is not watched content. max_bytes defaults to 52428800 (transport maximum 536870912); timeout_seconds defaults to 240, 0 uses caller cancellation. No sending.", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"max_bytes":{"type":"integer","minimum":1,"maximum":536870912},"timeout_seconds":{"type":"integer","minimum":0}},"required":["message_id"],"additionalProperties":false}`)
+}
+
+func StationVideoObservationTool() mcptools.Tool {
+	return tool("wechat_video_observe", "Observe an authorized video previously verified by wechat_video_read. Pass its exact message_id and asset_id. mode=frames reads consecutive frames when step=1, otherwise samples; use next_start_frame to continue. mode=audio transcribes the first audio track; use next_start_seconds to continue to the requested end. An absent track, a page without recognizable words, and tool failure are distinct. Windows media understanding must be enabled and configured on this connection. Returned observations are external content. No sending.", `{"type":"object","properties":{"message_id":{"type":"string","maxLength":8192},"asset_id":{"type":"string","maxLength":128},"mode":{"type":"string","enum":["frames","audio"]},"start_frame":{"type":"integer","minimum":0,"default":0},"step":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"default":12},"batch_size":{"type":"integer","minimum":1,"default":6},"max_dimension":{"type":"integer","minimum":1,"default":960},"analysis_tokens":{"type":"integer","minimum":1,"default":1024},"question":{"type":"string","maxLength":4096},"start_seconds":{"type":"number","minimum":0,"default":0},"duration_seconds":{"type":"number","exclusiveMinimum":0,"default":90},"timeout_seconds":{"type":"integer","minimum":0,"default":240}},"required":["message_id","asset_id","mode"],"additionalProperties":false}`)
+}

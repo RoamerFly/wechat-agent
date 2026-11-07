@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/localasr"
 )
 
 func TestASRDiagnosticsReportsPluginConfigurationAndLiveReadiness(t *testing.T) {
@@ -43,11 +44,11 @@ func TestASRDiagnosticsReportsPluginConfigurationAndLiveReadiness(t *testing.T) 
 		}
 	}
 	assert(true)
-	installed, err := policy.store.Installed(ctx, localASRPluginID)
+	installed, err := policy.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false); err != nil {
+	if _, err = policy.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
 	assert(false)

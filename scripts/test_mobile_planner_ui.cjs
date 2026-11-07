@@ -2,6 +2,18 @@
 'use strict';
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
+const flow=require('../internal/admin/static/flow-model.js');
+
+// The legacy live-device configuration must be unavailable until status is
+// known, then remain absent only on the Windows retirement path. This is kept
+// outside the browser fixture so the transition stays covered even when the
+// package renderer evolves independently.
+assert.equal(flow.isDeviceControlRetired(),true);
+assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
+flow.setDeviceControlRetired(false);
+assert.equal(flow.catalog.tools.pages.includes('mobile'),true);
+flow.setDeviceControlRetired(true);
+assert.equal(flow.catalog.tools.pages.includes('mobile'),false);
 
 (async()=>{
  const edge='C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
@@ -165,10 +177,11 @@ const fs=require('node:fs/promises'),fsSync=require('node:fs'),os=require('node:
    await page.setViewportSize({width,height:1400});await page.evaluate(value=>{document.documentElement.dataset.theme=value;for(const selector of ['.package-editor','.package-workspace']){const node=document.querySelector(selector);node.style.maxHeight='none';node.style.overflow='visible'}},theme);await page.locator('.mobile-observation-workbench').scrollIntoViewIfNeeded();await settle();
    await page.screenshot({path:path.join(output,`observation-${theme}-${width}.png`),fullPage:false});
   }
-   await page.evaluate(()=>{window.dispatchEvent(new CustomEvent('wechat-admin:logout'));window.WechatAccountContext.id='two'});await open();
-  await page.evaluate(()=>{window.__accounts.two.data={state:'archive',tasks:[{id:'old',goal:'已保留任务',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'仅可查看历史或停止已有任务。'}};window.__schema=[{id:'tasks',title:'保留的设备任务',component:'tasks',binding:'host_data.tasks',action:'tasks.cancel'},window.__originalSchema[2],{...window.__originalSchema[3],action:''},window.__originalSchema[0]]});await open();await settle();
-  assert.equal(await page.getByRole('button',{name:'保存设备设置',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'开始任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'启动工具',exact:true}).count(),0);assert(await page.getByRole('button',{name:'取消任务',exact:true}).isVisible());
-  await page.evaluate(()=>{document.documentElement.dataset.theme='light'});await page.screenshot({path:path.join(output,'archive-light-1440.png'),fullPage:true});await page.getByRole('button',{name:'取消任务',exact:true}).click();await page.waitForFunction(()=>window.__accounts.two.data.tasks[0].state==='cancelled');
+  await page.evaluate(()=>{window.dispatchEvent(new CustomEvent('wechat-admin:logout'));window.WechatAccountContext.id='two'});await open();
+  await page.evaluate(()=>{window.__calls=[];window.__accounts.two.data={state:'archive',read_only:true,tasks:[{id:'old',goal:'已保留任务',state:'queued',device_id:'lab',artifacts:[]}],resources:{},diagnostics:{planner_available:false,planner_reason:'手机控制已停用；只能查看已保留的任务、截图和录屏。'}};window.__schema=[{id:'tasks',title:'保留的设备任务',component:'tasks',binding:'host_data.tasks',action:''},window.__originalSchema[2],{...window.__originalSchema[3],action:''},window.__originalSchema[0]]});await open();await settle();
+  assert.equal(await page.getByRole('button',{name:'保存设备设置',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'开始任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'启动工具',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'停止全部任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'取消任务',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'观察一次',exact:true}).count(),0);assert(await page.getByText('手机控制已停用；只能查看已保留的任务、截图和录屏。',{exact:true}).isVisible());
+  assert.equal(await page.evaluate(()=>window.__calls.filter(call=>call.url.includes('/actions/')).length),0,'opening an archive must not invoke a host action');
+  await page.evaluate(()=>{document.documentElement.dataset.theme='light'});await page.screenshot({path:path.join(output,'archive-light-1440.png'),fullPage:true});
   await page.getByRole('button',{name:'管理连接工具',exact:true}).click();assert(await page.locator('.plugin-workspace').isVisible());await page.getByRole('button',{name:'返回工具目录',exact:true}).click();assert(await page.locator('.package-browser').isVisible());assert.deepEqual(errors,[]);assert.deepEqual(consoleErrors,[]);console.log(JSON.stringify({schemaOrderOmitTitle:true,exactBindings:true,nestedPlannerFlags:true,disabledRuntimeStart:true,saveInFlightDraft:true,accountIsolation:true,idempotencyRetry:true,archiveReadOnly:true,visualWidths:[375,1440],visualThemes:['light','dark'],screenshots:output,paidCalls:0,wechatSends:0}));
  }catch(error){if(page)await page.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(()=>{});console.error('Screenshots: '+output);throw error}finally{await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -80,11 +80,11 @@ func mediaPolicyFixture(t *testing.T, remember bool) (*webFixture, *bindingChann
 }
 
 func mediaRequest(p *mediaPluginPolicy) json.RawMessage {
-	content := []any{map[string]any{"type": "text", "text": p.prompt}}
-	for _, ref := range p.refs {
+	content := []any{map[string]any{"type": "text", "text": p.Parameters().Prompt}}
+	for _, ref := range p.Parameters().Refs {
 		content = append(content, map[string]any{"type": "image_url", "image_url": map[string]any{"url": map[string]any{"$media_ref": ref}, "detail": "auto"}})
 	}
-	body := map[string]any{"model": p.model, "messages": []any{map[string]any{"role": "system", "content": "Describe only provided pixels"}, map[string]any{"role": "user", "content": content}}, "max_tokens": p.tokens, "stream": false}
+	body := map[string]any{"model": p.Parameters().Model, "messages": []any{map[string]any{"role": "system", "content": "Describe only provided pixels"}, map[string]any{"role": "user", "content": content}}, "max_tokens": p.Parameters().Tokens, "stream": false}
 	raw, _ := json.Marshal(map[string]any{"route": "vision", "body": body, "max_bytes": 4096, "timeout_seconds": 10})
 	return raw
 }
@@ -93,7 +93,7 @@ const mediaReply = `{"choices":[{"message":{"content":"Synthetic pixels","reason
 
 func mediaJob(p *mediaPluginPolicy) (pluginhost.Job, pluginhost.Capability) {
 	i, _ := p.store.Installed(context.Background(), "media-understanding")
-	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: "1", Tool: "media.observe", Context: p.invocation()}, pluginhost.Capability{ID: "media.observe", Permissions: []string{"artifact.read", "model.invoke"}}
+	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: "1", Tool: "media.observe", Context: p.Invocation()}, pluginhost.Capability{ID: "media.observe", Permissions: []string{"artifact.read", "model.invoke"}}
 }
 
 func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
@@ -104,13 +104,13 @@ func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
 			calls := 0
 			p.post = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
 				calls++
-				if endpoint != "https://provider.example/chat/completions" || headers["Authorization"] != "Bearer synthetic-private-key" || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(p.images[0].Data))) || bytes.Contains(body, []byte("$media_ref")) {
+				if endpoint != "https://provider.example/chat/completions" || headers["Authorization"] != "Bearer synthetic-private-key" || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(p.Images()[0].Data))) || bytes.Contains(body, []byte("$media_ref")) {
 					t.Fatal("unbound transport")
 				}
 				return json.RawMessage(mediaReply), nil
 			}
 			request := mediaRequest(p)
-			for _, bad := range []json.RawMessage{bytes.Replace(request, []byte("synthetic-model"), []byte("other-model"), 1), bytes.Replace(request, []byte(p.refs[0].SHA), []byte(strings.Repeat("0", 64)), 1), bytes.Replace(request, []byte("image_0"), []byte("foreign"), 1)} {
+			for _, bad := range []json.RawMessage{bytes.Replace(request, []byte("synthetic-model"), []byte("other-model"), 1), bytes.Replace(request, []byte(p.Parameters().Refs[0].SHA), []byte(strings.Repeat("0", 64)), 1), bytes.Replace(request, []byte("image_0"), []byte("foreign"), 1)} {
 				if _, err := p.Service(ctx, j, cap, "wechat/model_request", bad); err == nil {
 					t.Fatal("modified request accepted")
 				}
@@ -124,7 +124,7 @@ func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
 			if _, err := p.Service(ctx, j, cap, "wechat/model_request", request); err == nil || calls != 1 {
 				t.Fatal("duplicate model call", err, calls)
 			}
-			result := map[string]any{"ok": true, "observation": "Synthetic pixels", "status": "observed", "sources": p.refs, "coverage": "provided_images_only", "untrusted_external_content": true, "audio_observed": false, "requested_model": p.model, "requested_max_tokens": p.tokens, "thinking": false, "reasoning_effort": nil, "provider_model": nil, "usage": map[string]any{"total_tokens": 999999}}
+			result := map[string]any{"ok": true, "observation": "Synthetic pixels", "status": "observed", "sources": p.Parameters().Refs, "coverage": "provided_images_only", "untrusted_external_content": true, "audio_observed": false, "requested_model": p.Parameters().Model, "requested_max_tokens": p.Parameters().Tokens, "thinking": false, "reasoning_effort": nil, "provider_model": nil, "usage": map[string]any{"total_tokens": 999999}}
 			raw, _ := json.Marshal(result)
 			verified, err := p.Validate(ctx, j, cap, raw)
 			if err != nil || !bytes.Contains(verified.Private, []byte("Synthetic pixels")) || bytes.Contains(verified.Result, []byte("Synthetic pixels")) {
@@ -135,9 +135,7 @@ func TestMediaPluginSourceAndModelAuthority(t *testing.T) {
 			if _, err = p.Validate(ctx, j, cap, raw); err == nil {
 				t.Fatal("fabricated observation accepted")
 			}
-			f.manager.billing.mu.Lock()
-			total := f.manager.billing.data.Total
-			f.manager.billing.mu.Unlock()
+			total := f.manager.billing.Totals()
 			if total.Requests != 1 || total.Reported != 1 || total.Input != 100 || total.Output != 10 || total.CacheHit != 40 {
 				t.Fatalf("provider billing: %+v", total)
 			}
@@ -207,7 +205,7 @@ func TestMediaPluginDisabledBlocksImageAndVideoFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := mediaUnderstanding{manager: f.manager}
-	if _, err := a.observeImages(ctx, n.msg, p.prompt, p.images); err == nil || err.Error() != "media_plugin_disabled" {
+	if _, err := a.observeImages(ctx, n.msg, p.Parameters().Prompt, p.Images()); err == nil || err.Error() != "media_plugin_disabled" {
 		t.Fatal(err)
 	}
 	if _, err := a.observeVideo(ctx, n.msg, nil, videoSample{Seconds: 1}, false); err == nil || err.Error() != "media_plugin_disabled" {
@@ -253,7 +251,7 @@ func TestMediaPluginFailedTransportNeverRetries(t *testing.T) {
 			t.Fatal("transport error lost")
 		}
 	}
-	if calls != 1 || f.manager.billing.data.Total.Requests != 1 {
+	if calls != 1 || f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("unknown outcome retried or uncounted", calls)
 	}
 }
@@ -324,11 +322,11 @@ func transcriptionFixture(t *testing.T, remember bool) (*webFixture, *bindingCha
 
 func transcriptionJob(p *mediaTranscriptionPolicy) (pluginhost.Job, pluginhost.Capability) {
 	i, _ := p.store.Installed(context.Background(), "media-understanding")
-	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: strconv.Itoa(p.configRevision), Tool: "media.transcribe", Context: p.invocation()}, pluginhost.Capability{ID: "media.transcribe", Permissions: []string{"artifact.read", "model.invoke"}}
+	return pluginhost.Job{Plugin: i.Package.ID, Version: i.Package.Version, PackageDigest: i.Digest, ConfigRevision: strconv.Itoa(p.ConfigRevision()), Tool: "media.transcribe", Context: p.invocation()}, pluginhost.Capability{ID: "media.transcribe", Permissions: []string{"artifact.read", "model.invoke"}}
 }
 
 func transcriptionRequest(p *mediaTranscriptionPolicy) json.RawMessage {
-	body := map[string]any{"model": p.model, "input": map[string]any{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": map[string]any{"$media_ref": p.ref}}}}}}}, "parameters": map[string]string{"format": "wav", "sample_rate": "16000"}}
+	body := map[string]any{"model": "synthetic-asr", "input": map[string]any{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": map[string]any{"$media_ref": p.Reference()}}}}}}}, "parameters": map[string]string{"format": "wav", "sample_rate": "16000"}}
 	raw, _ := json.Marshal(map[string]any{"route": "transcription", "body": body, "max_bytes": 4096, "timeout_seconds": 15})
 	return raw
 }
@@ -341,7 +339,7 @@ func TestMediaTranscriptionSourceAndProviderAuthority(t *testing.T) {
 			calls := 0
 			p.post = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
 				calls++
-				if endpoint != "https://provider.example/api/v1/services/aigc/multimodal-generation/generation" || headers["Authorization"] != "Bearer synthetic-asr-key" || bytes.Contains(body, []byte("$media_ref")) || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(p.wav))) {
+				if endpoint != "https://provider.example/api/v1/services/aigc/multimodal-generation/generation" || headers["Authorization"] != "Bearer synthetic-asr-key" || bytes.Contains(body, []byte("$media_ref")) || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(syntheticWAV()))) {
 					t.Fatal("unbound ASR transport")
 				}
 				return json.RawMessage(`{"output":{"text":"synthetic transcript"}}`), nil
@@ -356,7 +354,7 @@ func TestMediaTranscriptionSourceAndProviderAuthority(t *testing.T) {
 			if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err == nil || calls != 1 {
 				t.Fatal("ASR duplicate", err, calls)
 			}
-			result := map[string]any{"ok": true, "text": "synthetic transcript", "status": "transcribed", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true}
+			result := map[string]any{"ok": true, "text": "synthetic transcript", "status": "transcribed", "sources": []mediaAudioReference{p.Reference()}, "coverage": "provided_audio_only", "untrusted_external_content": true}
 			raw, _ := json.Marshal(result)
 			verified, err := p.Validate(ctx, j, cap, raw)
 			if err != nil || !bytes.Contains(verified.Private, []byte("synthetic transcript")) || bytes.Contains(verified.Result, []byte("synthetic transcript")) {
@@ -399,12 +397,12 @@ func TestMediaTranscriptionNoWordsAndUncertainTransport(t *testing.T) {
 	if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"ok": true, "text": "", "status": "no_recognizable_speech", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true})
+	raw, _ := json.Marshal(map[string]any{"ok": true, "text": "", "status": "no_recognizable_speech", "sources": []mediaAudioReference{p.Reference()}, "coverage": "provided_audio_only", "untrusted_external_content": true})
 	verified, err := p.Validate(ctx, j, cap, raw)
 	if err != nil || !bytes.Contains(verified.Private, []byte("no_recognizable_speech")) {
 		t.Fatal(err)
 	}
-	if f.manager.billing.data.Total.Requests != 1 {
+	if f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("ASR attempt not billed")
 	}
 	_ = calls
@@ -413,15 +411,19 @@ func TestMediaTranscriptionNoWordsAndUncertainTransport(t *testing.T) {
 func TestMediaTranscriptionKnownProviderFailureIsTerminal(t *testing.T) {
 	_, _, p, ctx := transcriptionFixture(t, false)
 	j, cap := transcriptionJob(p)
-	p.requested = true
-	p.providerReply = json.RawMessage(`{"code":"provider_rejected"}`)
-	verified, err := p.Validate(ctx, j, cap, json.RawMessage(`{"ok":false,"error":"asr_provider_failed"}`))
+	failure := json.RawMessage(`{"ok":false,"error":"asr_provider_failed"}`)
+	if _, err := p.Validate(ctx, j, cap, failure); err == nil {
+		t.Fatal("unknown transport was treated as terminal")
+	}
+	p.post = func(context.Context, string, map[string]string, json.RawMessage, int64, time.Duration) (json.RawMessage, error) {
+		return json.RawMessage(`{"code":"provider_rejected"}`), nil
+	}
+	if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := p.Validate(ctx, j, cap, failure)
 	if err != nil || !verified.Failed {
 		t.Fatal("known provider failure was not terminal", err)
-	}
-	p.providerReply = nil
-	if _, err = p.Validate(ctx, j, cap, json.RawMessage(`{"ok":false,"error":"asr_provider_failed"}`)); err == nil {
-		t.Fatal("unknown transport was treated as terminal")
 	}
 }
 
@@ -434,7 +436,7 @@ func TestMediaTranscriptionUsageWithoutProviderSchemaStaysUnknown(t *testing.T) 
 	if _, err := p.Service(ctx, j, cap, "wechat/model_request", transcriptionRequest(p)); err != nil {
 		t.Fatal(err)
 	}
-	total := f.manager.billing.data.Total
+	total := f.manager.billing.Totals()
 	if total.Requests != 1 || total.Reported != 0 || total.Input != 0 || total.Output != 0 {
 		t.Fatalf("unrecognized ASR usage was misreported: %+v", total)
 	}
@@ -503,7 +505,7 @@ func TestLiveMediaTranscriptionSourceAdapterRecovery(t *testing.T) {
 	}
 	c = start()
 	defer c.Close()
-	fresh, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, p.wav)
+	fresh, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, syntheticWAV())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +514,7 @@ func TestLiveMediaTranscriptionSourceAdapterRecovery(t *testing.T) {
 		return nil, nil
 	}
 	text, err = fresh.transcribe(ctx)
-	if err != nil || text != "synthetic transcript" || f.manager.billing.data.Total.Requests != 1 {
+	if err != nil || text != "synthetic transcript" || f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("ASR recovery", text, err)
 	}
 }
@@ -539,14 +541,14 @@ func TestLiveMediaSourceAdapterRecovery(t *testing.T) {
 		return c
 	}
 	c := start()
-	text, err := p.observe(ctx)
+	text, err := p.Observe(ctx)
 	c.Close()
 	if err != nil || text != "Synthetic pixels" || calls != 1 {
 		t.Fatal("source adapter execution", text, err, calls)
 	}
 	c = start()
 	defer c.Close()
-	fresh, err := f.manager.newMediaPluginPolicy(ctx, n.msg, p.prompt, p.images, 0)
+	fresh, err := f.manager.newMediaPluginPolicy(ctx, n.msg, p.Parameters().Prompt, p.Images(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,8 +556,8 @@ func TestLiveMediaSourceAdapterRecovery(t *testing.T) {
 		t.Fatal("recovery resubmitted provider")
 		return nil, nil
 	}
-	text, err = fresh.observe(ctx)
-	if err != nil || text != "Synthetic pixels" || f.manager.billing.data.Total.Requests != 1 {
+	text, err = fresh.Observe(ctx)
+	if err != nil || text != "Synthetic pixels" || f.manager.billing.Totals().Requests != 1 {
 		t.Fatal("recovery", text, err)
 	}
 }

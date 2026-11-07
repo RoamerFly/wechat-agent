@@ -28,6 +28,17 @@ func RunMusicIsolated(ctx context.Context, config Config, cwd string, argv []str
 	return runIsolated(ctx, config, cwd, argv, policy, environment, true)
 }
 
+// RunSpeechIsolated runs the trusted offline speech runtime in the Windows
+// broker.  It intentionally has no caller-supplied policy: speech synthesis
+// may read the Windows registry for its local runtime, but must not receive
+// any network capability.  Generic Agent command tools never call it.
+func RunSpeechIsolated(ctx context.Context, config Config, cwd string, argv []string, environment map[string]string) ([]byte, []byte, error) {
+	if runtime.GOOS != "windows" {
+		return nil, nil, errors.New("windows_speech_policy_not_authorized")
+	}
+	return runIsolated(ctx, config, cwd, argv, "registry-read-offline-speech-v1", environment, true)
+}
+
 func runIsolated(ctx context.Context, config Config, cwd string, argv []string, policy string, environment map[string]string, captureDiagnostic bool) ([]byte, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err

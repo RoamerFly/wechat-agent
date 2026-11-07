@@ -23,7 +23,7 @@ func TestChannelsObservationHonorsReadPermissionAndScope(t *testing.T) {
 	n := &scopedChannelsNative{fakeNative: f.native}
 	f.manager.native = n
 	kind := 51
-	msg := linuxnative.Message{ID: "msg-card", ThreadID: "filehelper", Type: 49, AppMessageType: &kind, Link: &linuxnative.LinkCard{Title: "Video title"}}
+	msg := linuxnative.Message{ID: "msg-card", ThreadID: "filehelper", Direction: "incoming", Type: 49, AppMessageType: &kind, Link: &linuxnative.LinkCard{Title: "Video title"}}
 	a := mediaUnderstanding{manager: f.manager}
 	f.manager.config.Behavior.ReadVideos = false
 	text, err := a.Analyze(context.Background(), msg)

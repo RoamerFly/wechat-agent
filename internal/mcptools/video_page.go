@@ -13,6 +13,7 @@ import (
 
 var biliVideoPath = regexp.MustCompile(`^/video/(BV[A-Za-z0-9]{10})/?$`)
 var biliShortPath = regexp.MustCompile(`^/[A-Za-z0-9]{3,32}/?$`)
+var biliCanonicalBV = regexp.MustCompile(`^BV[0-9A-Za-z]{10}$`)
 
 type publicVideoRefererKey struct{}
 type PublicVideo struct {
@@ -71,12 +72,13 @@ func selectBiliPart(out biliPage, bvid string, part int) (biliPage, error) {
 	}
 	return out, nil
 }
-func parseBiliProgressive(body []byte, limit int64) (string, int64, error) {
+func parseBiliProgressive(body []byte, limit int64, sampling bool) (string, int64, error) {
 	var result struct {
-		Code int `json:"code"`
+		Code *int `json:"code"`
 		Data struct {
 			Duration  int64           `json:"timelength"`
 			IsPreview json.RawMessage `json:"is_preview"`
+			Format    string          `json:"format"`
 			Durl      []struct {
 				URL  string `json:"url"`
 				Size int64  `json:"size"`
@@ -86,16 +88,24 @@ func parseBiliProgressive(body []byte, limit int64) (string, int64, error) {
 	if json.Unmarshal(body, &result) != nil {
 		return "", 0, &WebError{Code: "video_page_metadata_unavailable", Stage: "video_playback"}
 	}
-	if result.Code != 0 || bytes.Equal(result.Data.IsPreview, []byte("true")) || bytes.Equal(result.Data.IsPreview, []byte("1")) {
+	if sampling && result.Code != nil && (*result.Code == -412 || *result.Code == -352) {
+		return "", 0, &WebError{Code: "http_status", Status: 412, Stage: "video_playback"}
+	}
+	preview := string(bytes.TrimSpace(result.Data.IsPreview))
+	if result.Code != nil && *result.Code != 0 || sampling && result.Code == nil ||
+		preview == "true" || preview == "1" || sampling && preview != "" && preview != "false" && preview != "0" && preview != "null" {
 		return "", 0, &WebError{Code: "video_public_playback_unavailable", Stage: "video_playback"}
 	}
-	if len(result.Data.Durl) != 1 {
+	if len(result.Data.Durl) != 1 || sampling && !strings.EqualFold(result.Data.Format, "mp4") {
 		return "", 0, &WebError{Code: "video_progressive_unavailable", Stage: "video_playback"}
 	}
-	if result.Data.Duration <= 0 || result.Data.Duration > 10*60*1000 {
+	if result.Data.Duration <= 0 || !sampling && result.Data.Duration > 10*60*1000 {
 		return "", 0, &WebError{Code: "video_duration_limit", Stage: "video_playback"}
 	}
 	file := result.Data.Durl[0]
+	if sampling && file.Size <= 0 {
+		return "", 0, &WebError{Code: "video_public_playback_unavailable", Stage: "video_playback"}
+	}
 	if file.Size > limit {
 		return "", 0, &WebError{Code: "response_too_large", Stage: "video_playback"}
 	}
@@ -109,21 +119,33 @@ func parseBiliProgressive(body []byte, limit int64) (string, int64, error) {
 // Resolve only ordinary, anonymously playable BV pages. No cookies, account
 // state, paid formats, DRM keys, JavaScript execution or arbitrary API calls.
 func DownloadPublicVideoPage(ctx context.Context, raw string, limit int64) (PublicVideo, error) {
-	return downloadPublicVideoPage(ctx, raw, limit, false)
+	return downloadPublicVideoPage(ctx, raw, limit, false, false)
 }
 
 // Audio extraction uses the same anonymously playable progressive file;
 // it never supplies cookies, accesses paid streams or guesses audio endpoints.
 func DownloadPublicVideoAudio(ctx context.Context, raw string, limit int64) (PublicVideo, error) {
-	return downloadPublicVideoPage(ctx, raw, limit, true)
+	return downloadPublicVideoPage(ctx, raw, limit, true, false)
 }
 
 // Receiving and understanding a long video still requires actual content;
 // the one-minute link-only rule applies to delivery, never to observation.
 func DownloadPublicVideoObservation(ctx context.Context, raw string, limit int64) (PublicVideo, error) {
-	return downloadPublicVideoPage(ctx, raw, limit, true)
+	return downloadPublicVideoPage(ctx, raw, limit, true, false)
 }
-func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio bool) (PublicVideo, error) {
+
+// GetPublicBilibiliVideo resolves one exact, anonymously playable BV into a
+// bounded progressive file. It deliberately rejects multi-part works rather
+// than silently sampling their first part. The returned value never exposes a
+// signed CDN URL.
+func GetPublicBilibiliVideo(ctx context.Context, bvid string, limit int64) (PublicVideo, error) {
+	if !biliCanonicalBV.MatchString(bvid) || limit <= 0 || limit > 32<<20 {
+		return PublicVideo{}, &WebError{Code: "video_public_playback_unavailable", Stage: "video_playback"}
+	}
+	return downloadPublicVideoPage(ctx, "https://www.bilibili.com/video/"+bvid+"/", limit, true, true)
+}
+
+func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio, singlePart bool) (PublicVideo, error) {
 	if kuaishouPhotoID(raw) != "" {
 		return downloadKuaishouVideo(ctx, raw, limit, audio)
 	}
@@ -189,10 +211,20 @@ func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio
 	if err != nil {
 		return out, err
 	}
+	// Playback sampling must be able to prove which media part supplied the
+	// bytes. A missing pages list is not proof of a single-part work, so reject
+	// it together with ordinary multi-part works.
+	if singlePart && (len(state.Video.Pages) != 1 || state.Video.Pages[0].CID != state.Video.CID || state.Video.Pages[0].Duration <= 0) {
+		return out, &WebError{Code: "video_public_playback_unavailable", Stage: "video_playback"}
+	}
 	if !audio && state.Video.Duration > 60 {
 		return PublicVideo{LinkOnly: true, Title: state.Video.Title, PageURL: page, DurationMS: state.Video.Duration * 1000}, nil
 	}
-	api := "https://api.bilibili.com/x/player/playurl?" + url.Values{"bvid": {match[1]}, "cid": {strconv.FormatInt(state.Video.CID, 10)}, "qn": {"32"}, "fnval": {"0"}, "fourk": {"0"}}.Encode()
+	quality, fnval := "32", "0"
+	if singlePart {
+		quality, fnval = "16", "1"
+	}
+	api := "https://api.bilibili.com/x/player/playurl?" + url.Values{"bvid": {match[1]}, "cid": {strconv.FormatInt(state.Video.CID, 10)}, "qn": {quality}, "fnval": {fnval}, "fourk": {"0"}}.Encode()
 	body, _, _, err = publicRead(metaCtx, api, maxBody)
 	if err != nil {
 		return out, err
@@ -206,7 +238,7 @@ func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio
 	if !audio && json.Unmarshal(body, &length) == nil && length.Code == 0 && length.Data.DurationMS > 60000 {
 		return PublicVideo{LinkOnly: true, Title: state.Video.Title, PageURL: page, DurationMS: length.Data.DurationMS}, nil
 	}
-	direct, duration, err := parseBiliProgressive(body, limit)
+	direct, duration, err := parseBiliProgressive(body, limit, singlePart)
 	if err != nil {
 		return out, err
 	}
@@ -218,6 +250,9 @@ func downloadPublicVideoPage(ctx context.Context, raw string, limit int64, audio
 	typ, err = ValidateMediaType("video", typ, data)
 	if err != nil {
 		return out, err
+	}
+	if singlePart && typ != "video/mp4" {
+		return out, &WebError{Code: "media_type_mismatch", Stage: "video_playback"}
 	}
 	return PublicVideo{Data: data, ContentType: typ, Title: state.Video.Title, PageURL: page, DurationMS: duration}, nil
 }

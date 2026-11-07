@@ -20,27 +20,65 @@ namespace WechatAgent.Desktop {
     internal static class Program {
         static readonly object loaderGate = new object();
         static bool loaderConfigured;
+#if LOCAL_STATION
+        const bool LocalStationBuild = true;
+#else
+        const bool LocalStationBuild = false;
+#endif
         [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
         static extern int SetCurrentProcessExplicitAppUserModelID(string identity);
         [STAThread]
         static void Main(string[] args) {
+            if (Array.IndexOf(args, "--prepare-legacy-cutover") >= 0) {
+                Environment.ExitCode = PrepareLegacyCutover(args);
+                return;
+            }
             if (args.Length == 1 && (args[0] == "--start-services" || args[0] == "--stop-services" || args[0] == "--exit-services")) {
-                Environment.ExitCode = DesktopInstance.RequestCommand(args[0].Substring(2)) ? 0 : 1;
+                Environment.ExitCode = DesktopInstance.RequestCommand(args[0].Substring(2), InstanceName()) ? 0 : 1;
                 return;
             }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
-                using (var instance = new DesktopInstance()) {
-                    // Admit before reading another copy's configuration or
-                    // constructing any form/WebView/service process.
+                // The binary family is the only authority for its control
+                // namespace.  Admit before reading configuration so a second
+                // instance cannot touch another instance's files or services.
+                using (var instance = new DesktopInstance(InstanceName())) {
                     if (!instance.IsOwner) { instance.ActivateOwner(); return; }
-                    SetCurrentProcessExplicitAppUserModelID("RoamerFly.WechatAgent.Desktop");
-                    RegisterDependencies();
                     var d = Deployment.Load(Deployment.FindWorkspace(args));
+                    if (d.LocalStation != LocalStationBuild) throw new InvalidOperationException(LocalStationBuild ? "AgentHomeStation 只能打开 local-station 本机成长站配置。" : "WechatAgent 不能打开 local-station 预览配置；请使用 AgentHomeStation.exe。");
+                    SetCurrentProcessExplicitAppUserModelID(LocalStationBuild ? "RoamerFly.AgentHomeStation.Local" : "RoamerFly.WechatAgent.Desktop");
+                    RegisterDependencies();
                     Run(d, instance);
                 }
             } catch (Exception error) { MessageBox.Show(error.Message, "Agent-home-station · 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
+        static int PrepareLegacyCutover(string[] args) {
+#if LOCAL_STATION
+            Console.Error.WriteLine("请使用旧微信桌面启动器执行此交接命令。");
+            return 1;
+#else
+            try {
+                if (args.Length != 3 || args[0] != "--prepare-legacy-cutover" || args[1] != "--workspace" || (Path.GetPathRoot(args[2]) ?? "").Length != 3)
+                    throw new ArgumentException("参数：--prepare-legacy-cutover --workspace <本机绝对项目目录>");
+                using (var instance = new DesktopInstance(DesktopInstance.Name)) {
+                    if (!instance.IsOwner) throw new InvalidOperationException("旧微信桌面仍在运行，请先正常停止。");
+                    var workspace = Path.GetFullPath(args[2]);
+                    WindowsRuntime.NoLinks(workspace);
+                    WindowsRuntime.NoLinks(Path.Combine(workspace, "secrets"));
+                    var config = Path.Combine(workspace, "secrets", "local-deployment.json");
+                    if (File.Exists(config) && (File.GetAttributes(config) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException("部署配置不能使用重解析点。");
+                    WindowsRuntime.PrepareOfflineCutover(Deployment.Load(workspace), CancellationToken.None).GetAwaiter().GetResult();
+                    Console.WriteLine("{\"state\":\"stopped\",\"mode\":\"offline_hold\"}");
+                    return 0;
+                }
+            } catch (Exception error) {
+                Console.Error.WriteLine(error.Message);
+                return 1;
+            }
+#endif
+        }
+        static string InstanceName() { return LocalStationBuild ? DesktopInstance.LocalStationName : DesktopInstance.Name; }
         internal static void RegisterDependencies() {
                 AppDomain.CurrentDomain.AssemblyResolve += delegate(object sender, ResolveEventArgs e) {
                     string name = new AssemblyName(e.Name).Name;

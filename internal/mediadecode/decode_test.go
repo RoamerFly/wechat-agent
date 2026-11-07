@@ -2,6 +2,8 @@ package mediadecode
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"os/exec"
@@ -54,9 +56,16 @@ func TestSampleProbeAndFrameExtractionPreserveEvidence(t *testing.T) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	if wav, seconds, err := ExtractAudioRange(ctx, path, filepath.Join(dir, "audio.wav"), 0, 1); !errors.Is(err, ErrNoAudioTrack) || len(wav) != 0 || seconds != 0 {
+		t.Fatalf("video without an audio stream: %d bytes, %v seconds, %v", len(wav), seconds, err)
+	}
 	meta, err := Probe(ctx, path)
 	if err != nil || meta.Frames != 24 || meta.Width != 96 || meta.Height != 64 {
 		t.Fatalf("metadata=%+v err=%v", meta, err)
+	}
+	header, err := ProbeMetadata(ctx, path)
+	if err != nil || header.Frames != 0 || header.Width != meta.Width || header.Height != meta.Height || header.FPS != meta.FPS || header.Seconds != meta.Seconds {
+		t.Fatalf("header metadata=%+v counted=%+v err=%v", header, meta, err)
 	}
 	frames, times, err := ExtractFramesSized(ctx, path, t.TempDir(), 0, 24, 1, 96)
 	if err != nil || len(frames) != 24 || len(times) != 24 {
@@ -66,5 +75,54 @@ func TestSampleProbeAndFrameExtractionPreserveEvidence(t *testing.T) {
 		if times[i] <= times[i-1] {
 			t.Fatalf("timestamps are not consecutive: %v then %v", times[i-1], times[i])
 		}
+	}
+}
+
+func TestProbeMetadataValidationWithoutFrameCount(t *testing.T) {
+	metadata := map[string]any{
+		"streams": []map[string]any{{"avg_frame_rate": "12/1", "width": 96, "height": 64}},
+		"format":  map[string]string{"duration": "2"},
+	}
+	encode := func() []byte {
+		raw, err := json.Marshal(metadata)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	if result, err := parseVideoMetadata(encode(), false); err != nil || result.Frames != 0 || result.FPS != 12 {
+		t.Fatalf("uncounted video rejected: %+v %v", result, err)
+	}
+	if _, err := parseVideoMetadata(encode(), true); err == nil {
+		t.Fatal("counted probe accepted missing frame count")
+	}
+	stream := metadata["streams"].([]map[string]any)[0]
+	for _, rate := range []string{"0/0", "0/1", "-12/1", "NaN/1", "+Inf/1", "12/+Inf", "invalid"} {
+		stream["avg_frame_rate"] = rate
+		if _, err := parseVideoMetadata(encode(), false); err == nil {
+			t.Fatalf("invalid video FPS accepted: %s", rate)
+		}
+	}
+	stream["avg_frame_rate"] = "12/1"
+	for _, field := range []string{"width", "height"} {
+		original := stream[field]
+		for _, dimension := range []int{0, -1} {
+			stream[field] = dimension
+			if _, err := parseVideoMetadata(encode(), false); err == nil {
+				t.Fatalf("invalid %s accepted: %d", field, dimension)
+			}
+		}
+		stream[field] = original
+	}
+	for _, duration := range []string{"", "0", "-1", "NaN", "+Inf"} {
+		metadata["format"] = map[string]string{"duration": duration}
+		if _, err := parseVideoMetadata(encode(), false); err == nil {
+			t.Fatalf("invalid video duration accepted: %s", duration)
+		}
+	}
+	metadata["format"] = map[string]string{"duration": "2"}
+	metadata["streams"] = []map[string]any{}
+	if _, err := parseVideoMetadata(encode(), false); err == nil {
+		t.Fatal("metadata without video stream accepted")
 	}
 }

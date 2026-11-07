@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "scope",
+    "access_token",
+    "open_id",
+    "expires_at",
+    "video_ids"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "posting.behavior"
+      ]
+    },
+    "access_token": {
+      "type": "string",
+      "x-secret": true,
+      "x-host-only": true,
+      "pattern": "^act[.][A-Za-z0-9_-]{1,512}$"
+    },
+    "open_id": {
+      "type": "string",
+      "x-host-only": true,
+      "pattern": "^[A-Za-z0-9_-]{1,256}$"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "x-host-only": true
+    },
+    "video_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{0,19}$"
+      },
+      "minItems": 1,
+      "maxItems": 100
+    }
+  }
+}

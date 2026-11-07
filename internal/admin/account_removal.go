@@ -91,7 +91,7 @@ func (a *accountRegistry) removeAccount(w http.ResponseWriter, r *http.Request, 
 		// the service-level fish identity and any other platform binding remain.
 		// Do this before deleting account storage so a registry failure cannot be
 		// reported as a successful purge.
-		if err = a.fish.unbind(id); err != nil {
+		if err = a.fish.Unbind(id); err != nil {
 			fail(w, 500, "账号已停用，鱼身份解绑未完成："+err.Error())
 			return
 		}
@@ -162,7 +162,7 @@ func (a *accountRegistry) eraseAccountFiles(id string) error {
 			return errors.New("私有工作区身份不匹配，已保留资料")
 		}
 	}
-	fishID, _, err := a.fish.bindings()
+	fishID, _, err := a.fish.Bindings()
 	if err != nil {
 		return err
 	}

@@ -69,7 +69,7 @@ def mount_granted(path, sid, mode):
         kernel.LocalFree(descriptor)
 
 
-def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_runtime=False, environment=None, input_stream=None):
+def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_runtime=False, speech_runtime=False, environment=None, input_stream=None):
     """Return a process handle, pid and cleanup. Child inherits only stdio.
 
     LPAC additionally opts out of implicit ALL APPLICATION PACKAGES grants.
@@ -113,9 +113,16 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
     for p, _ in paths:
         if Path(p).parent == Path(p) or Path(p).is_junction() or Path(p).is_symlink():
             raise RuntimeError("lpac_invalid_mount")
-    if type(music_runtime) is not bool:
+    if type(music_runtime) is not bool or type(speech_runtime) is not bool or music_runtime and speech_runtime:
         raise ValueError("invalid_music_runtime_policy")
-    name = "WechatAgent." + hashlib.sha256(repr((sorted(paths), music_runtime)).encode()).hexdigest()[:32]
+    # Keep legacy generic/music identities byte-for-byte stable: their ACLs
+    # and runtime caches are already bound to this hash.  Offline speech gets
+    # a separate namespace so its registry-only capability can never reuse a
+    # music container which has private-network access.
+    if speech_runtime:
+        name = "WechatAgent.Speech." + hashlib.sha256(repr((sorted(paths), speech_runtime)).encode()).hexdigest()[:32]
+    else:
+        name = "WechatAgent." + hashlib.sha256(repr((sorted(paths), music_runtime)).encode()).hexdigest()[:32]
     hr = u.CreateAppContainerProfile(name, name, "Managed WeChat workspace", None, 0, c.byref(sid))
     if hr != 0 and u.DeriveAppContainerSidFromAppContainerName(name, c.byref(sid)) != 0:
         raise RuntimeError("lpac_profile_unavailable")
@@ -144,9 +151,9 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
     si = STARTUPINFOEX()
     si.StartupInfo.cb = c.sizeof(si)
     si.lpAttributeList = c.cast(buf, c.c_void_p)
-    # Only the trusted, explicitly enabled music supervisor requests this
-    # policy. windows_agent_host never reads a request field for it.
-    capabilities = MusicCapabilities() if music_runtime else None
+    # Only fixed, trusted broker policies may request capabilities.  Offline
+    # speech may read registry configuration but receives no network capability.
+    capabilities = MusicCapabilities() if music_runtime else SpeechCapabilities() if speech_runtime else None
     caps = SECURITY_CAPABILITIES(sid, capabilities.pointer if capabilities else None,
                                  capabilities.count if capabilities else 0, 0)
     optout = w.DWORD(1)
@@ -178,11 +185,12 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
                "TEMP": str(Path(writable[0]) / "scratch"), "TMP": str(Path(writable[0]) / "scratch")}
         if environment:
             permitted = {"DOCUMENT_RUNTIME_ROOT"}
-            if music_runtime:
+            if music_runtime or speech_runtime:
                 permitted.update({"PATH", "HF_HOME", "HF_HUB_CACHE", "TORCH_HOME", "HF_HUB_OFFLINE",
                          "NLTK_DATA",
                          "TRANSFORMERS_OFFLINE", "PYTHONDONTWRITEBYTECODE", "PYTHONUTF8",
-                         "PYTORCH_CUDA_ALLOC_CONF", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "WECHAT_WINDOWS_MUSIC_RUNTIME", "USERNAME"})
+                         "PYTORCH_CUDA_ALLOC_CONF", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "WECHAT_WINDOWS_MUSIC_RUNTIME",
+                         "WECHAT_WINDOWS_SPEECH_RUNTIME", "USERNAME"})
             if set(environment) - permitted or any(not isinstance(v, str) or "\0" in v for v in environment.values()):
                 raise ValueError("invalid_music_runtime_environment")
             env.update(environment)
@@ -223,9 +231,9 @@ def launch(argv, cwd, writable, readonly, output, error_output=None, *, music_ru
             capabilities.close()
 
 
-class MusicCapabilities:
-    """The two owner-authorized capabilities, never arbitrary model input."""
-    def __init__(self):
+class RuntimeCapabilities:
+    """Fixed capability SIDs for a host-selected runtime policy."""
+    def __init__(self, names):
         class Entry(c.Structure):
             _fields_ = [("Sid", c.c_void_p), ("Attributes", w.DWORD)]
         self.allocations = []
@@ -233,7 +241,7 @@ class MusicCapabilities:
         derive.argtypes = [w.LPCWSTR, c.POINTER(c.c_void_p), c.POINTER(w.DWORD), c.POINTER(c.c_void_p), c.POINTER(w.DWORD)]
         entries = []
         try:
-            for name in ("registryRead", "privateNetworkClientServer"):
+            for name in names:
                 groups, values = c.c_void_p(), c.c_void_p()
                 group_count, count = w.DWORD(), w.DWORD()
                 if not derive(name, c.byref(groups), c.byref(group_count), c.byref(values), c.byref(count)):
@@ -257,6 +265,18 @@ class MusicCapabilities:
         for value in reversed(self.allocations):
             kernel.LocalFree(value)
         self.allocations.clear()
+
+
+class MusicCapabilities(RuntimeCapabilities):
+    """The two owner-authorized music capabilities, never model input."""
+    def __init__(self):
+        super().__init__(("registryRead", "privateNetworkClientServer"))
+
+
+class SpeechCapabilities(RuntimeCapabilities):
+    """Offline speech runtime: local registry read only, never network."""
+    def __init__(self):
+        super().__init__(("registryRead",))
 
 class BASIC_LIMIT(c.Structure):
     _fields_=[("PerProcessUserTimeLimit",c.c_int64),("PerJobUserTimeLimit",c.c_int64),("LimitFlags",w.DWORD),("MinimumWorkingSetSize",c.c_size_t),("MaximumWorkingSetSize",c.c_size_t),("ActiveProcessLimit",w.DWORD),("Affinity",c.c_size_t),("PriorityClass",w.DWORD),("SchedulingClass",w.DWORD)]

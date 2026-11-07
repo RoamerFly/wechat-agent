@@ -119,6 +119,23 @@ func TestRefreshEvidenceRowNeverRestoresRedactedAttachment(t *testing.T) {
 	}
 }
 
+func TestRefreshEvidenceRowKeepsFailedVideoWithoutCachedObservation(t *testing.T) {
+	e := &Engine{Config: enabledConfig()}
+	ref := SourceRef{EventID: "event-video", MessageID: "video", Sender: "another-member", MessageType: 43, Revision: 1}
+	ev := MemoryEvent{ID: ref.EventID, Trace: ref.MessageID, Role: "user", Sender: ref.Sender, Source: &ref, Revision: ref.Revision,
+		IncomingMedia: []IncomingMediaRef{{Source: ref, Kind: "video", UploaderID: ref.Sender, ObservationState: "observed", Observation: "旧的合成画面"}}}
+	ordinary := map[string]any{}
+	e.refreshEvidenceRow(ordinary, ev)
+	if ordinary["media_observations"] == nil {
+		t.Fatal("fixture did not load cached observation")
+	}
+	failed := map[string]any{"media_read_status": "本轮视频未取得证据", "media_observations": ordinary["media_observations"]}
+	e.refreshEvidenceRow(failed, ev)
+	if failed["media_observations"] != nil || failed["media_read_status"] == nil {
+		t.Fatalf("refresh restored video contents or lost the failure status: %#v", failed)
+	}
+}
+
 func groupPacketsFromPreparedContext(t *testing.T, raw []byte) ([]map[string]any, map[string]any) {
 	t.Helper()
 	var prepared struct {

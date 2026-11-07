@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -136,16 +137,8 @@ func (p *permittedTools) shareServiceSource(ctx context.Context, id string) (lin
 	if msg.ID != id || msg.AccountID != p.trace.Account || msg.Direction != "incoming" || msg.Type != 49 || msg.AppMessageType == nil || !p.conversationReadAllowed(msg.ThreadID) {
 		return linuxnative.Message{}, errors.New("share_service_source_not_authorized")
 	}
-	switch *msg.AppMessageType {
-	case 4, 5:
-		if msg.Link == nil || sharePublicURL(msg.Link.URL) == "" {
-			return linuxnative.Message{}, errors.New("share_service_public_source_required")
-		}
-	case 51:
-		// The native Channels record is read later by the existing policy. No
-		// object/export identifier enters this façade's request schema.
-	default:
-		return linuxnative.Message{}, errors.New("share_service_source_kind_unsupported")
+	if _, err := wechatapp.ShareReadCapability(msg); err != nil {
+		return linuxnative.Message{}, err
 	}
 	return msg, nil
 }
@@ -321,11 +314,15 @@ func (p *permittedTools) callShareServicePlugin(ctx context.Context, capability,
 		return nil, err
 	}
 	ctx = withSourceActor(ctx, p, agentID("service-share", requestKey, capability, message.ID, string(normalized)), message.ThreadID)
-	switch *message.AppMessageType {
-	case 4, 5:
-		if capability != "share.resolve_public" {
-			return nil, errors.New("share_service_capability_source_mismatch")
-		}
+	resolver, err := wechatapp.ShareReadCapability(message)
+	if err != nil {
+		return nil, err
+	}
+	if capability != resolver {
+		return nil, errors.New("share_service_capability_source_mismatch")
+	}
+	switch resolver {
+	case "share.resolve_public":
 		policy, err := p.manager.newPublicSharePolicy(ctx, message)
 		if err != nil {
 			return nil, err
@@ -338,10 +335,7 @@ func (p *permittedTools) callShareServicePlugin(ctx context.Context, capability,
 			return nil, errors.New("share_service_offset_outside_results")
 		}
 		return publicShareFacadeResult(message, observation, in), nil
-	case 51:
-		if capability != "share.resolve_channels" {
-			return nil, errors.New("share_service_capability_source_mismatch")
-		}
+	case "share.resolve_channels":
 		if shareServiceHasPaging(raw) {
 			return nil, errors.New("share_service_channels_pagination_unsupported")
 		}
@@ -349,8 +343,8 @@ func (p *permittedTools) callShareServicePlugin(ctx context.Context, capability,
 		if !ok {
 			return nil, errors.New("channels_source_backend_missing")
 		}
-		source, err := reader.ChannelsMedia(ctx, message.ID)
-		if err != nil || source.AccountID != message.AccountID || source.ThreadID != message.ThreadID || source.MessageID != message.ID {
+		source, err := wechatapp.ReadChannelsSource(ctx, message, p.trace.Account, reader)
+		if err != nil {
 			return nil, errors.New("channels_source_scope_mismatch")
 		}
 		policy, err := p.manager.newReceivedSharePolicy(ctx, message)

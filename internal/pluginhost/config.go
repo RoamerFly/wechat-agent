@@ -316,16 +316,29 @@ func (s *Store) SaveConfiguration(ctx context.Context, id string, input ConfigUp
 	return s.saveConfiguration(ctx, id, input, nil)
 }
 
+// SaveIdleConfiguration is a trusted host lifecycle operation. The controller
+// must first exclude new invocations and terminate the idle runtime. Unlike the
+// ordinary configuration API it preserves enabled intent, while the same commit
+// rejects work or migrations that still require recovery. Plugin/model callers
+// must not receive this operation as a capability.
+func (s *Store) SaveIdleConfiguration(ctx context.Context, id string, input ConfigUpdate) (Configuration, error) {
+	return s.saveConfigurationMode(ctx, id, input, nil, true)
+}
+
 // saveConfiguration keeps the normal public API semantics while allowing a
 // host-internal lifecycle transition to join the exact same SQLite commit.
 func (s *Store) saveConfiguration(ctx context.Context, id string, input ConfigUpdate, onCommit func(*sql.Tx, int) error) (Configuration, error) {
+	return s.saveConfigurationMode(ctx, id, input, onCommit, false)
+}
+
+func (s *Store) saveConfigurationMode(ctx context.Context, id string, input ConfigUpdate, onCommit func(*sql.Tx, int) error, idle bool) (Configuration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item, err := s.Installed(ctx, id)
 	if err != nil {
 		return Configuration{}, err
 	}
-	if item.Removed || item.Enabled {
+	if item.Removed || item.Enabled && !idle {
 		return Configuration{}, errors.New("stop plugin before editing configuration")
 	}
 	schema, err := s.ConfigSchema(ctx, id)
@@ -359,6 +372,25 @@ func (s *Store) saveConfiguration(ctx context.Context, id string, input ConfigUp
 		return Configuration{}, err
 	}
 	defer tx.Rollback()
+	if idle {
+		var revision, removed int
+		if err := tx.QueryRowContext(ctx, `SELECT revision,removed FROM installed WHERE id=?`, id).Scan(&revision, &removed); err != nil {
+			return Configuration{}, err
+		}
+		if removed != 0 || revision != item.Revision {
+			return Configuration{}, ErrRevision
+		}
+		var unfinished, migrating int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND state NOT IN ('completed','failed','cancelled'))`, id).Scan(&unfinished); err != nil {
+			return Configuration{}, err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM migrations WHERE plugin=? AND state='pending')`, id).Scan(&migrating); err != nil {
+			return Configuration{}, err
+		}
+		if unfinished != 0 || migrating != 0 {
+			return Configuration{}, errors.New("plugin configuration has unfinished work")
+		}
+	}
 	revision := 0
 	private := map[string]string{}
 	var old []byte

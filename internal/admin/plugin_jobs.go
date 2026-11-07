@@ -24,7 +24,7 @@ func (m *Manager) agentTaskActive(in companion.Input) bool {
 		return true
 	}
 	if t, ok := m.agent.lookupTask(in.TaskID, in.Account, in.Thread); ok {
-		return t.State != "cancelled" && t.State != "stopped"
+		return (!m.mobileRetired || t.DeviceTask == "") && t.State != "cancelled" && t.State != "stopped"
 	}
 	return false
 }

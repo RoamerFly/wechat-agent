@@ -36,6 +36,10 @@ func (s *Server) replyShare(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	c := cloneConfig(m.config)
 	m.mu.Unlock()
+	if c.ConnectionPaused {
+		fail(w, 409, "微信连接已暂停，未提交分享回复")
+		return
+	}
 	scope, err := m.memoryScope(r.PathValue("id"))
 	if err != nil {
 		fail(w, 404, "会话不存在")
@@ -260,5 +264,5 @@ func (m *Manager) submitReviewedShare(ctx context.Context, native nativeTools, e
 			return linuxnative.ToolStatus{}, rejectOutboundEvidence(err)
 		}
 	}
-	return native.Submit(ctx, request)
+	return m.submitWechat(ctx, native, request)
 }

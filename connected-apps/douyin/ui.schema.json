@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "ordinary-web-account",
+      "title": "抖音账号",
+      "fields": [],
+      "action": "owner-saved-web-login"
+    },
+    {
+      "id": "publication-tasks",
+      "title": "作品任务",
+      "fields": [],
+      "action": "owner-publication-tasks"
+    },
+    {
+      "id": "interaction-tasks",
+      "title": "互动任务",
+      "fields": [],
+      "action": "owner-interaction-tasks"
+    }
+  ]
+}

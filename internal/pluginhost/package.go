@@ -197,12 +197,21 @@ func safePath(p string) bool {
 // Digests prove integrity, not publisher trust. The installer must separately
 // bind the verified package to an administrator-approved source.
 func Verify(dir string) (Package, error) {
+	return VerifyDescriptor(dir, "plugin.json")
+}
+
+// VerifyDescriptor lets connected applications share the package integrity
+// contract. The descriptor name does not grant installation or execution.
+func VerifyDescriptor(dir, descriptor string) (Package, error) {
 	var p Package
+	if descriptor != "plugin.json" && descriptor != "app.json" {
+		return p, errors.New("unsupported package descriptor")
+	}
 	st, err := os.Lstat(dir)
 	if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
 		return p, errors.New("package directory unavailable")
 	}
-	manifest := filepath.Join(dir, "plugin.json")
+	manifest := filepath.Join(dir, descriptor)
 	info, err := os.Lstat(manifest)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
 		return p, errors.New("invalid manifest file")
@@ -257,7 +266,7 @@ func Verify(dir string) (Package, error) {
 		return p, err
 	}
 	for name, digest := range p.Files {
-		if !safePath(name) || name == "plugin.json" || len(digest) != 64 {
+		if !safePath(name) || name == descriptor || len(digest) != 64 {
 			return p, errors.New("invalid file index")
 		}
 		if _, err = hex.DecodeString(digest); err != nil {
@@ -292,7 +301,7 @@ func Verify(dir string) (Package, error) {
 			return e
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == "plugin.json" {
+		if rel == descriptor {
 			return nil
 		}
 		expected, ok := p.Files[rel]

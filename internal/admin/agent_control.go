@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 	"wechat-bot/internal/agenthost"
+	"wechat-bot/internal/apphost"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/plugins"
@@ -186,13 +187,14 @@ type agentTask struct {
 	RecoveryPrivacy  *companion.RecoveryPrivacyBinding `json:"model_recovery_privacy,omitempty"`
 }
 type agentOperation struct {
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	ID        string          `json:"id"`
-	Tool      string          `json:"tool"`
-	Thread    string          `json:"thread"`
-	State     string          `json:"state"`
-	Result    string          `json:"result"`
-	At        time.Time       `json:"at"`
+	AppAction *apphost.ActionIntent `json:"app_action,omitempty"`
+	Arguments json.RawMessage       `json:"arguments,omitempty"`
+	ID        string                `json:"id"`
+	Tool      string                `json:"tool"`
+	Thread    string                `json:"thread"`
+	State     string                `json:"state"`
+	Result    string                `json:"result"`
+	At        time.Time             `json:"at"`
 }
 type agentData struct {
 	Tasks      map[string]agentTask      `json:"tasks"`
@@ -498,6 +500,9 @@ func (m *Manager) claimAgentTask(now time.Time, busy func(string) bool) (*compan
 		return nil, nil
 	}
 	for _, t := range m.agent.active(m.native.Account(), "") {
+		if m.mobileRetired && t.DeviceTask != "" {
+			continue
+		}
 		if t.Reminder != nil || (t.State != "pending" && t.State != "waiting") || now.Before(t.Next) || busy(t.Thread) || !permittedRecipient(cfg.Config, t.Thread) {
 			continue
 		}
@@ -825,9 +830,15 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			fail(w, 400, "操作无效")
 			return
 		}
-		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok && (old.State == "completed" || old.State == "cancelled" || old.State == "stopped") {
-			fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
-			return
+		if old, ok := s.manager.agent.lookupTask(r.PathValue("id"), s.manager.native.Account(), ""); ok {
+			if s.manager.mobileRetired && old.DeviceTask != "" {
+				fail(w, http.StatusGone, errDeviceServiceRetired.Error())
+				return
+			}
+			if old.State == "completed" || old.State == "cancelled" || old.State == "stopped" {
+				fail(w, 409, "任务已结束并移至历史，不重新执行；如有新的需求，请创建新任务")
+				return
+			}
 		}
 		for _, t := range s.manager.agent.list(s.manager.native.Account(), "") {
 			if t.ID != r.PathValue("id") {
@@ -886,6 +897,10 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 // privilegedCall durably claims side effects. Interrupted/unknown operations
 // are never repeated automatically, including after restart or model retries.
 func (p *permittedTools) privilegedCall(ctx context.Context, name string, args json.RawMessage, fn func() (any, error)) (string, error) {
+	return p.claimPrivilegedCall(ctx, name, args, nil, fn)
+}
+
+func (p *permittedTools) claimPrivilegedCall(ctx context.Context, name string, args json.RawMessage, intent *apphost.ActionIntent, fn func() (any, error)) (string, error) {
 	a := p.manager.agent
 	id := p.operationID(name, args)
 	a.mu.Lock()
@@ -899,7 +914,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 		}
 		return old.Result, nil
 	}
-	op := agentOperation{Arguments: args, ID: id, Tool: name, Thread: p.trace.Thread, State: "running", Result: `{"state":"unknown","instruction":"已领取执行，勿重复提交；请核查实际结果"}`, At: time.Now().UTC()}
+	op := agentOperation{AppAction: intent, Arguments: args, ID: id, Tool: name, Thread: p.trace.Thread, State: "running", At: time.Now().UTC()}
 	claimed, _ := json.Marshal(map[string]string{"operation_id": id, "state": "unknown", "instruction": "已领取执行，勿重复提交；请核查实际结果"})
 	op.Result = string(claimed)
 	a.data.Operations[id] = op
@@ -912,12 +927,13 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	value, err := fn()
 	var inputFailure *agentLocalError
 	mediaInputRejected := name == "wechat_send_media" && errors.As(err, &inputFailure)
+	connectionPaused := errors.Is(err, errWechatConnectionPaused)
 	if err != nil {
 		value = map[string]any{"state": "needs_review", "reason": err.Error(), "instruction": "操作可能已经产生影响；请检查实际结果，不自动重复"}
 		if name == "server_process" || name == "server_windows_process" {
 			value = map[string]any{"state": "rejected", "reason": err.Error(), "instruction": "程序未启动；检查路径、参数和本机执行环境后可更正再试，不属于结果不确定"}
 		}
-		if strings.HasPrefix(name, "wechat_") {
+		if strings.HasPrefix(name, "wechat_") && intent == nil {
 			value = map[string]any{"state": "waiting", "reason": err.Error(), "instruction": "读取目标会话真实记录和原发送任务，依据反馈继续排查并修复。新的一次补发尝试可用新request_key，保留原job_id；已接受部分不重发。需要退避时agent_task保存waiting检查点，不能只说明失败便结束。"}
 		}
 		if mediaInputRejected {
@@ -927,6 +943,9 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 		if strings.HasPrefix(name, "wechat_") && errors.As(err, &evidenceFailure) {
 			diagnostic := evidenceFailure.diagnostic()
 			value = map[string]any{"state": "needs_review", "reason": err.Error(), "code": diagnostic.Code, "stage": diagnostic.Stage, "not_started": diagnostic.NotStarted, "retryable": diagnostic.Retryable, "continuation": diagnostic.Continuation, "instruction": diagnostic.Continuation}
+		}
+		if connectionPaused {
+			value = map[string]any{"state": "paused", "code": "wechat_connection_paused", "not_started": true, "instruction": "该连接已暂停，尚未新增提交；恢复连接后可继续原操作。"}
 		}
 	}
 	b, _ := json.Marshal(value)
@@ -942,7 +961,7 @@ func (p *permittedTools) privilegedCall(ctx context.Context, name string, args j
 	op.State = "completed"
 	if err != nil {
 		op.State = "needs_review"
-		if name == "server_process" || name == "server_windows_process" || mediaInputRejected {
+		if name == "server_process" || name == "server_windows_process" || mediaInputRejected || connectionPaused {
 			op.State = "rejected"
 		}
 	}

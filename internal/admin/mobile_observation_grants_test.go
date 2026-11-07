@@ -43,7 +43,7 @@ func observationGrantFixture(t *testing.T) (*webFixture, *mobileWorkflowService,
 	if _, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.manager.fish.bind(f.native.Account()); err != nil {
+	if _, err = f.manager.fish.Bind(f.native.Account()); err != nil {
 		t.Fatal(err)
 	}
 	f.login()
@@ -257,7 +257,7 @@ func TestMobileObservationAppGrantBindingGenerationAndPersistence(t *testing.T) 
 	if grant, ok, err := service.ObservationAppGrant("synthetic", packageName); err != nil || !ok || grant.GrantID != first.GrantID {
 		t.Fatalf("settings save lost app grant=%#v ok=%v err=%v", grant, ok, err)
 	}
-	reopened, err := NewManager(f.dir, "", f.native)
+	reopened, err := NewManagerWithDeviceIO(f.dir, "", f.native, f.manager.deviceIO)
 	if err != nil {
 		t.Fatal(err)
 	}

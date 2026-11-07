@@ -10,12 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
 )
 
 type nativeIOPolicy struct {
-	call              IOCall
+	call              devicespec.IOCall
 	operation, source string
 	invocation        pluginhost.Invocation
 	raw               json.RawMessage
@@ -48,7 +49,7 @@ func (p *nativeIOPolicy) Service(ctx context.Context, j pluginhost.Job, cap plug
 	if json.Unmarshal(raw, &r) != nil || r.Operation != p.operation || r.Source != p.source {
 		return nil, errToolDenied
 	}
-	return p.call.Service(WithIOAuthority(ctx, func(ctx context.Context) error { return p.Check(ctx, j, cap) }), r.Step, r.Device, r.Parameters)
+	return p.call.Service(devicespec.WithIOAuthority(ctx, func(ctx context.Context) error { return p.Check(ctx, j, cap) }), r.Step, r.Device, r.Parameters)
 }
 func (p *nativeIOPolicy) Validate(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability, raw json.RawMessage) (pluginruntime.VerifiedResult, error) {
 	if err := p.Check(ctx, j, cap); err != nil {
@@ -62,7 +63,7 @@ func (p *nativeIOPolicy) Validate(ctx context.Context, j pluginhost.Job, cap plu
 	if json.Unmarshal(raw, &r) != nil || r.Operation != p.operation || r.Source != p.source {
 		return pluginruntime.VerifiedResult{}, errToolDenied
 	}
-	value, err := p.call.Complete(WithIOAuthority(ctx, func(ctx context.Context) error { return p.Check(ctx, j, cap) }), r.Result)
+	value, err := p.call.Complete(devicespec.WithIOAuthority(ctx, func(ctx context.Context) error { return p.Check(ctx, j, cap) }), r.Result)
 	if err != nil {
 		return pluginruntime.VerifiedResult{}, err
 	}

@@ -56,7 +56,7 @@ func TestBoundMediaTranscriptionOriginRequiresProofAndRechecks(t *testing.T) {
 		t.Fatal("bound origin resubmitted a provider request", err, calls)
 	}
 	valid = false
-	result, _ := json.Marshal(map[string]any{"ok": true, "text": "synthetic bound transcript", "status": "transcribed", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true})
+	result, _ := json.Marshal(map[string]any{"ok": true, "text": "synthetic bound transcript", "status": "transcribed", "sources": []mediaAudioReference{p.Reference()}, "coverage": "provided_audio_only", "untrusted_external_content": true})
 	if _, err = p.Validate(ctx, job, capability, result); err == nil {
 		t.Fatal("revoked bound origin accepted provider result")
 	}
@@ -105,7 +105,7 @@ func TestIncomingMediaTranscriptionRangeSuffixBindsCurrentInvocation(t *testing.
 	// This is the same shape used by video_inspect: a silent range can produce
 	// byte-identical WAV data, but each requested time range remains a distinct
 	// idempotency operation.
-	policy.requestSuffix = agentID(policy.requestSuffix, "0", "30")
+	policy.appendRequestSuffix("0", "30")
 	currentJob, _ := transcriptionJob(policy)
 	if currentJob.Context.RequestKey == oldJob.Context.RequestKey {
 		t.Fatal("range suffix did not change the incoming transcription request key")
@@ -117,11 +117,11 @@ func TestIncomingMediaTranscriptionRangeSuffixBindsCurrentInvocation(t *testing.
 		t.Fatal("pre-range job remained valid after the requested range changed")
 	}
 
-	other, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, policy.wav)
+	other, err := f.manager.newMediaTranscriptionPolicy(ctx, n.msg, policy.WAV())
 	if err != nil {
 		t.Fatal(err)
 	}
-	other.requestSuffix = agentID(other.requestSuffix, "30", "30")
+	other.appendRequestSuffix("30", "30")
 	otherJob, _ := transcriptionJob(other)
 	if otherJob.Context.RequestKey == currentJob.Context.RequestKey {
 		t.Fatal("two requested ranges with identical WAV bytes collapsed into one request key")
@@ -197,8 +197,8 @@ func TestLiveAdminMediaTranscriptionOriginIsolation(t *testing.T) {
 		return json.RawMessage(`{"output":{"text":"synthetic administrator transcript"}}`), nil
 	}
 	text, err := p.transcribe(ctx)
-	if err != nil || text != "synthetic administrator transcript" || asrCalls != 1 || p.completedJob.State != "completed" {
-		t.Fatal("isolated administrator ASR origin failed", text, err, asrCalls, p.completedJob)
+	if err != nil || text != "synthetic administrator transcript" || asrCalls != 1 || p.CompletedJob().State != "completed" {
+		t.Fatal("isolated administrator ASR origin failed", text, err, asrCalls, p.CompletedJob())
 	}
 	if err = p.checkCompleted(ctx); err != nil {
 		t.Fatal("completed administrator transcript lost its origin proof", err)

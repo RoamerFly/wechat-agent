@@ -56,6 +56,24 @@ func ensureDecoder() error {
 	return nil
 }
 
+// Available reports whether local decoding can be attempted.
+func Available() bool { return ensureDecoder() == nil }
+
+// ProbeDuration reads the local container duration without scanning frames.
+func ProbeDuration(ctx context.Context, path string) (float64, error) {
+	return probeDuration(ctx, path, videoAudioFormats)
+}
+
+func probeDuration(ctx context.Context, path, formats string) (float64, error) {
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", formats, "-show_entries", "format=duration", "-of", "csv=p=0", path)
+	hideDecoderWindow(probe)
+	duration, err := probe.Output()
+	if err != nil {
+		return 0, errors.New("video_analysis_probe_failed")
+	}
+	return ParseDuration(strings.TrimSpace(string(duration)))
+}
+
 // Sample writes the received bytes into an owner-provided private directory,
 // probes its duration, then decodes the historical six evenly spaced frames.
 // It preserves partial timing evidence on a later extraction error.
@@ -75,12 +93,7 @@ func Sample(ctx context.Context, dir string, data []byte) (SampleResult, error) 
 	if os.WriteFile(input, data, 0600) != nil {
 		return sample, errors.New("video_analysis_staging_failed")
 	}
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-show_entries", "format=duration", "-of", "csv=p=0", input)
-	duration, err := probe.Output()
-	if err != nil {
-		return sample, errors.New("video_analysis_probe_failed")
-	}
-	seconds, err := ParseDuration(strings.TrimSpace(string(duration)))
+	seconds, err := ProbeDuration(ctx, input)
 	if err != nil {
 		return sample, err
 	}
@@ -106,8 +119,36 @@ func Sample(ctx context.Context, dir string, data []byte) (SampleResult, error) 
 
 // Probe inspects the first video stream using the existing local-only protocol.
 func Probe(ctx context.Context, path string) (Metadata, error) {
+	return probeVideo(ctx, path, true)
+}
+
+// ProbeMetadata reads the first video stream's container metadata without
+// counting frames across the video. It does not prove complete decoding;
+// callers can separately decode the frames needed for their operation.
+func ProbeMetadata(ctx context.Context, path string) (Metadata, error) {
+	return probeVideo(ctx, path, false)
+}
+
+func probeVideo(ctx context.Context, path string, countFrames bool) (Metadata, error) {
+	arguments := []string{"-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0"}
+	if countFrames {
+		arguments = append(arguments, "-count_frames")
+	}
+	arguments = append(arguments, "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path)
+	command := exec.CommandContext(ctx, "ffprobe", arguments...)
+	hideDecoderWindow(command)
+	raw, err := command.Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return Metadata{}, errors.New("video_analysis_decoder_unavailable")
+	}
+	if err != nil {
+		return Metadata{}, errors.New("video_inspect_probe_failed")
+	}
+	return parseVideoMetadata(raw, countFrames)
+}
+
+func parseVideoMetadata(raw []byte, countFrames bool) (Metadata, error) {
 	var result Metadata
-	raw, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate,width,height:format=duration", "-of", "json", path).Output()
 	var info struct {
 		Streams []struct {
 			Count  string `json:"nb_read_frames"`
@@ -119,7 +160,7 @@ func Probe(ctx context.Context, path string) (Metadata, error) {
 			Duration string `json:"duration"`
 		} `json:"format"`
 	}
-	if err != nil || json.Unmarshal(raw, &info) != nil || len(info.Streams) != 1 {
+	if json.Unmarshal(raw, &info) != nil || len(info.Streams) != 1 {
 		return result, errors.New("video_inspect_probe_failed")
 	}
 	stream := info.Streams[0]
@@ -134,7 +175,9 @@ func Probe(ctx context.Context, path string) (Metadata, error) {
 			result.FPS = numerator / denominator
 		}
 	}
-	if result.Frames < 1 || result.Seconds <= 0 || math.IsNaN(result.Seconds) || math.IsInf(result.Seconds, 0) {
+	if result.Seconds <= 0 || math.IsNaN(result.Seconds) || math.IsInf(result.Seconds, 0) ||
+		(countFrames && result.Frames < 1) ||
+		(!countFrames && (result.Width < 1 || result.Height < 1 || result.FPS <= 0 || math.IsNaN(result.FPS) || math.IsInf(result.FPS, 0))) {
 		return result, errors.New("video_inspect_metadata_invalid")
 	}
 	return result, nil
@@ -148,6 +191,7 @@ func ExtractFramesSized(ctx context.Context, path, dir string, start, count, ste
 	end := start + (count-1)*step
 	filter := fmt.Sprintf("select=between(n\\,%d\\,%d)*not(mod(n-%d\\,%d)),showinfo,scale=%d:%d:force_original_aspect_ratio=decrease", start, end, start, step, dimension, dimension)
 	command := exec.CommandContext(ctx, "ffmpeg", "-v", "info", "-nostdin", "-y", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-threads", "1", "-i", path, "-map", "0:v:0", "-vf", filter, "-fps_mode", "vfr", "-frames:v", strconv.Itoa(count), "-threads", "1", "-filter_threads", "1", "-q:v", "4", filepath.Join(dir, "frame-%06d.jpg"))
+	hideDecoderWindow(command)
 	log, err := command.CombinedOutput()
 	if err != nil {
 		return nil, nil, errors.New("video_inspect_decode_failed")

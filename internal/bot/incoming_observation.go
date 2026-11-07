@@ -14,7 +14,7 @@ import (
 // reply. Private conversations retain on-demand reading for passive media.
 func (w *Worker) readMediaBeforeDecision(m linuxnative.Message) bool {
 	engine, ok := w.model.(*companion.Engine)
-	return strings.HasSuffix(m.ThreadID, "@chatroom") || m.Type == 34 || m.FileAttachmentName() != "" || !ok || engine.Tools == nil || w.generation == nil
+	return strings.HasSuffix(m.ThreadID, "@chatroom") || w.hasScopedMedia(m) || m.Type == 34 || m.FileAttachmentName() != "" || !ok || engine.Tools == nil || w.generation == nil
 }
 
 func incomingObservationTool() mcptools.Tool {

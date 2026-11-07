@@ -20,12 +20,13 @@ _RUNTIME_DIR = str(Path(__file__).resolve().parent)
 if _RUNTIME_DIR not in sys.path:
     sys.path.insert(0, _RUNTIME_DIR)
 
-from document_logic import DocumentError, basic_verify, inspect, reconstruct
+from document_logic import DocumentError, basic_verify, inspect, reconstruct, revise_title
 
 FRAME_LIMIT = 4 * 1024 * 1024
 TOOLS = [
     {"name": "document.inspect", "description": "Inspect a host-authorized document artifact.", "inputSchema": {"type": "object"}},
     {"name": "document.reconstruct", "description": "Create an editable DOCX from verified layout.", "inputSchema": {"type": "object"}},
+    {"name": "document.revise_title", "description": "Resize the main title of a verified editable DOCX.", "inputSchema": {"type": "object"}},
     {"name": "document.export_pdf", "description": "Export a host-authorized DOCX to PDF.", "inputSchema": {"type": "object"}},
     {"name": "document.verify", "description": "Verify a host-authorized DOCX or PDF.", "inputSchema": {"type": "object"}},
 ]
@@ -161,7 +162,16 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         path, item = _input(document, arguments)
         mime_type = str(item.get("mime_type", ""))
         if path.suffix.lower() == ".docx":
-            return {"ok": True, "summary": "document_inspected", "evidence": inspect(path, mime_type, arguments.get("pages"), bool(arguments.get("include_layout"))), "outputs": []}
+            return {"ok": True, "summary": "document_inspected", "evidence": inspect(
+                path,
+                mime_type,
+                arguments.get("pages"),
+                bool(arguments.get("include_layout")),
+                arguments.get("text_offset"),
+                arguments.get("text_limit"),
+                arguments.get("start_block"),
+                arguments.get("block_limit"),
+            ), "outputs": []}
         input_root = document.get("input_root") if isinstance(document.get("input_root"), str) else str(path.parent)
         output = _output(document)
         output_root = document.get("output_root") if isinstance(document.get("output_root"), str) else str(output)
@@ -175,6 +185,16 @@ def call(name: str, arguments: dict, meta: dict) -> dict:
         output = _output(document)
         product = reconstruct(arguments.get("layout"), output, arguments.get("filename", "document.docx"), arguments.get("title", ""), _images(document, arguments), arguments.get("title_font_size_pt"))
         return {"ok": True, "summary": "editable_docx_created", "evidence": {"sha256": product["sha256"], "text_characters": len(product["text"])}, "outputs": [_safe_output(Path(product["path"]), output, "editable_source", product["mime_type"])]}
+    if name == "document.revise_title":
+        if set(arguments) - {"artifact_id", "font_size_pt", "filename"}:
+            raise DocumentError("document_arguments_invalid")
+        path, item = _input(document, arguments)
+        if path.suffix.lower() != ".docx":
+            raise DocumentError("document_title_revision_requires_docx")
+        output = _output(document)
+        product = revise_title(path, output, arguments.get("filename", "revised.docx"), arguments.get("font_size_pt"))
+        evidence = {"sha256": product["sha256"], "input_sha256": item["sha256"], "font_size_pt": product["font_size_pt"]}
+        return {"ok": True, "summary": "editable_docx_revised", "evidence": evidence, "outputs": [_safe_output(Path(product["path"]), output, "editable_source", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]}
     if name == "document.verify":
         path, _ = _input(document, arguments)
         result = basic_verify(path, arguments.get("expected_text", []))

@@ -13,6 +13,15 @@ var ErrDirectoryChanged = errors.New("managed directory changed while opening")
 // EnsurePath walks from the filesystem root using pinned parent handles.
 // It never creates a child through an existing ancestor symlink.
 func EnsurePath(path string) (*os.Root, error) {
+	return openPath(path, true)
+}
+
+// OpenPath pins an existing absolute directory without creating components.
+func OpenPath(path string) (*os.Root, error) {
+	return openPath(path, false)
+}
+
+func openPath(path string, create bool) (*os.Root, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, errors.New("managed directory must be an absolute clean path")
 	}
@@ -26,13 +35,23 @@ func EnsurePath(path string) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
-	return EnsureDirectory(root, rel)
+	return walkDirectory(root, rel, create)
 }
 
 // EnsureDirectory returns a separately owned root for a relative directory.
 // Each component is checked and pinned before resolving its child; caller
 // retains ownership of parent. Symlinks cannot redirect reads or creation.
 func EnsureDirectory(parent *os.Root, path string) (*os.Root, error) {
+	return walkDirectory(parent, path, true)
+}
+
+// OpenExistingDirectory pins an existing relative directory without following
+// symbolic links or creating missing components.
+func OpenExistingDirectory(parent *os.Root, path string) (*os.Root, error) {
+	return walkDirectory(parent, path, false)
+}
+
+func walkDirectory(parent *os.Root, path string, create bool) (*os.Root, error) {
 	if filepath.IsAbs(path) || filepath.Clean(path) != path || path == ".." || strings.HasPrefix(path, ".."+string(os.PathSeparator)) {
 		return nil, errors.New("invalid managed relative directory")
 	}
@@ -45,7 +64,7 @@ func EnsureDirectory(parent *os.Root, path string) (*os.Root, error) {
 	}
 	for _, part := range strings.Split(path, string(os.PathSeparator)) {
 		info, err := root.Lstat(part)
-		if os.IsNotExist(err) {
+		if create && os.IsNotExist(err) {
 			if err = root.Mkdir(part, 0700); err != nil && !os.IsExist(err) {
 				root.Close()
 				return nil, err

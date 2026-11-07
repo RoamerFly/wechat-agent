@@ -9,6 +9,30 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
+type messageAnalyzer interface {
+	Analyze(context.Context, linuxnative.Message) (string, error)
+}
+
+type ScopedMediaAnalyzer interface {
+	messageAnalyzer
+	HandlesType(int) bool
+	SupportsMedia(context.Context, linuxnative.Message) bool
+}
+
+func (w *Worker) hasScopedMedia(m linuxnative.Message) bool {
+	return w.config.ScopedAnalyzer != nil && w.config.ScopedAnalyzer.HandlesType(m.Type)
+}
+
+func (w *Worker) mediaAnalyzer(ctx context.Context, m linuxnative.Message) messageAnalyzer {
+	if w.hasScopedMedia(m) {
+		if w.config.ScopedAnalyzer.SupportsMedia(ctx, m) {
+			return w.config.ScopedAnalyzer
+		}
+		return nil
+	}
+	return w.config.Analyzer
+}
+
 // Persist the original media identity before invoking an external parser. The
 // later observation updates this same source; it is never a new user statement.
 // Without memory permission, preserve the existing ephemeral observation path.
@@ -23,12 +47,13 @@ func (w *Worker) analyzeIncomingMediaEvidence(ctx context.Context, message linux
 	if err := ctx.Err(); err != nil {
 		return "", MediaObservationEvidence{}, err
 	}
-	if w.config.Analyzer == nil {
+	analyzer := w.mediaAnalyzer(ctx, message)
+	if analyzer == nil {
 		return "", MediaObservationEvidence{}, errors.New("media_analyzer_unavailable")
 	}
 	e, ok := w.model.(*companion.Engine)
 	if !ok || e.Store == nil || !e.Config.Permissions.Remember {
-		return analyzeMediaWithEvidence(ctx, w.config.Analyzer, message)
+		return analyzeMediaWithEvidence(ctx, analyzer, message)
 	}
 	account := w.source.Account()
 	if message.AccountID != "" && message.AccountID != account || message.ID == "" || message.ThreadID == "" {
@@ -48,7 +73,7 @@ func (w *Worker) analyzeIncomingMediaEvidence(ctx context.Context, message linux
 		return "", MediaObservationEvidence{}, errors.New("source_identity_conflict_or_unavailable")
 	}
 	ctx = companion.WithMediaSource(ctx, *source)
-	text, evidence, err := analyzeMediaWithEvidence(ctx, w.config.Analyzer, message)
+	text, evidence, err := analyzeMediaWithEvidence(ctx, analyzer, message)
 	if err != nil {
 		return text, MediaObservationEvidence{}, err
 	}
@@ -62,9 +87,7 @@ func (w *Worker) analyzeIncomingMediaEvidence(ctx context.Context, message linux
 	return text, evidence, nil
 }
 
-func analyzeMediaWithEvidence(ctx context.Context, analyzer interface {
-	Analyze(context.Context, linuxnative.Message) (string, error)
-}, message linuxnative.Message) (string, MediaObservationEvidence, error) {
+func analyzeMediaWithEvidence(ctx context.Context, analyzer messageAnalyzer, message linuxnative.Message) (string, MediaObservationEvidence, error) {
 	if trusted, ok := analyzer.(interface {
 		AnalyzeWithEvidence(context.Context, linuxnative.Message) (string, MediaObservationEvidence, error)
 	}); ok {

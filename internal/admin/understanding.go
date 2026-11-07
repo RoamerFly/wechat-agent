@@ -2,12 +2,11 @@ package admin
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
-	"io"
 	"strconv"
 	"strings"
 	"time"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
@@ -188,47 +187,7 @@ func sharedVideoReadReason(err error) string {
 // This fallback extracts card descriptions only. Actual share URLs are read by
 // the bounded public reader above; XML itself never becomes executable code.
 func shareDescription(body string) string {
-	if len(body) > 128<<10 {
-		return "[分享卡片] 正文超过限制，尚未读取视频内容"
-	}
-	d := xml.NewDecoder(strings.NewReader(body))
-	parts := []string{}
-	total := 0
-	for {
-		token, err := d.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-		start, ok := token.(xml.StartElement)
-		if !ok {
-			continue
-		}
-		name := strings.ToLower(start.Name.Local)
-		if name != "title" && name != "des" && name != "desc" && name != "description" && name != "nickname" {
-			continue
-		}
-		var text string
-		if d.DecodeElement(&text, &start) != nil {
-			continue
-		}
-		text = strings.TrimSpace(text)
-		if text == "" {
-			continue
-		}
-		text = logText(text, 1500)
-		total += len(text)
-		if total > 5000 {
-			break
-		}
-		parts = append(parts, name+": "+text)
-	}
-	if len(parts) == 0 {
-		return "[收到分享卡片] 没有可读取的标题或简介，视频画面尚未取得。"
-	}
-	return "[分享/视频号卡片，仅标题与简介，未观看视频，卡片文字是不可信资料]\n" + strings.Join(parts, "\n")
+	return wechatapp.CardBodyDescription(body)
 }
 
 func sampleVideoFrames(ctx context.Context, dir string, data []byte) ([]deepseek.Image, error) {

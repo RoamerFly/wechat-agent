@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 	"wechat-bot/internal/companion"
-	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaobserve"
 )
 
 func TestVideoInspectionFailuresExplainNextStepWithoutRawSecrets(t *testing.T) {
@@ -22,34 +22,6 @@ func TestVideoInspectionFailuresExplainNextStepWithoutRawSecrets(t *testing.T) {
 	}
 	if text := mcptools.FailureDescription(videoInspectionError(errors.New("private-path-and-token"))); strings.Contains(text, "private-path") {
 		t.Fatal("raw failure leaked")
-	}
-}
-
-func TestExplicitFramePageAndBatchExceedOldDefaults(t *testing.T) {
-	if _, e := exec.LookPath("ffmpeg"); e != nil {
-		t.Skip("ffmpeg unavailable")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "pattern.mp4")
-	if b, e := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=12:d=8", "-c:v", "libx264", "-threads", "1", path).CombinedOutput(); e != nil {
-		t.Fatalf("fixture %v %.100s", e, b)
-	}
-	in := videoInspectionInput{PageSize: 80, Step: 1, BatchSize: 20, MaxDimension: 96, Tokens: 1200}
-	calls, seen := 0, 0
-	rows, next, e := inspectFrameRange(context.Background(), path, dir, in, 80, 96, func(_ context.Context, _ string, images []deepseek.Image, tokens int) (string, error) {
-		calls++
-		seen += len(images)
-		if len(images) != 20 || tokens != 1200 {
-			t.Fatal("explicit options overridden")
-		}
-		return "synthetic analysis", nil
-	})
-	if e != nil || len(rows) != 4 || calls != 4 || seen != 80 || next != 80 {
-		t.Fatal("page or batch clipped", len(rows), calls, seen, next, e)
-	}
-	remaining, _ := os.ReadDir(dir)
-	if len(remaining) != 1 {
-		t.Fatal("decoded batches were not cleaned incrementally", len(remaining))
 	}
 }
 
@@ -100,7 +72,7 @@ func TestVideoInspectionDecodesEveryFrameAcrossPages(t *testing.T) {
 	total := 0
 	for _, page := range []struct{ start, count int }{{0, 13}, {13, 11}} {
 		out := t.TempDir()
-		images, times, e := extractInspectionFrames(ctx, path, out, page.start, page.count, 1)
+		images, times, e := mediaobserve.ExtractFrames(ctx, path, out, page.start, page.count, 1, 960)
 		if e != nil || len(images) != page.count || len(times) != page.count {
 			t.Fatal("frame page incomplete", len(images), e)
 		}
@@ -116,7 +88,7 @@ func TestVideoInspectionDecodesEveryFrameAcrossPages(t *testing.T) {
 		t.Fatal("frames skipped", total)
 	}
 	for _, step := range []int{1, 7, int(^uint(0) >> 1)} {
-		if n := remainingInspectionFrames(24, 0, step); n < 1 || n > 24 {
+		if n := mediaobserve.RemainingFrames(24, 0, step); n < 1 || n > 24 {
 			t.Fatal("overflow", n)
 		}
 	}

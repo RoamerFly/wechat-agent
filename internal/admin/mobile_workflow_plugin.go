@@ -83,38 +83,13 @@ func (s *mobileWorkflowService) load(create bool) (mobileWorkflowSnapshot, *plug
 	if closed {
 		return empty, nil, errDeviceServiceClosed
 	}
-	if !create {
-		_, dbErr := os.Stat(filepath.Join(s.manager.dir, "plugin-host", "plugins.sqlite"))
-		_, a := os.Stat(filepath.Join(s.manager.dir, "mobile", "settings.json"))
-		_, b := os.Stat(filepath.Join(s.manager.dir, "mobile", "tasks.json"))
-		if errors.Is(dbErr, os.ErrNotExist) && errors.Is(a, os.ErrNotExist) && errors.Is(b, os.ErrNotExist) {
-			return empty, nil, nil
-		}
-	}
-	store, err := s.manager.packageStore()
-	if err != nil {
+	store, err := s.manager.openMobileStateStore(create)
+	if err != nil || store == nil {
 		return empty, nil, err
 	}
-	host, err := store.ReadHostState(context.Background(), mobileDevicePluginID, mobileStateNamespace)
+	host, err := importMobileState(context.Background(), store, s.manager.dir)
 	if err != nil {
 		return empty, nil, err
-	}
-	if host.Revision == 0 {
-		legacy, found, e := mobile.ReadLegacyImport(filepath.Join(s.manager.dir, "mobile"))
-		if e != nil {
-			return empty, nil, e
-		}
-		if found {
-			records, e := mobileStateRecords(legacy.Settings, legacy.Tasks, store.Account())
-			if e != nil {
-				return empty, nil, e
-			}
-			records["manifest"], _ = json.Marshal(mobileImportManifest{Version: 1, SourceHash: legacy.SourceHash, TaskCount: len(legacy.Tasks)})
-			host, err = store.InitializeHostState(context.Background(), mobileDevicePluginID, mobileStateNamespace, legacy.SourceHash, records)
-			if err != nil {
-				return empty, nil, err
-			}
-		}
 	}
 	snapshot, err := decodeMobileHostState(host, store.Account())
 	if err != nil {
@@ -176,15 +151,7 @@ func (s *mobileWorkflowService) List(source *mobile.Source) []mobile.Task {
 	if err != nil {
 		return []mobile.Task{}
 	}
-	tasks := []mobile.Task{}
-	for _, task := range snapshot.tasks {
-		if source != nil && !source.Admin && (source.Account != task.Source.Account || source.Thread != task.Source.Thread) {
-			continue
-		}
-		tasks = append(tasks, mobileWorkflowClone(task))
-	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Created.After(tasks[j].Created) })
-	return tasks
+	return mobileTasksForSource(snapshot.tasks, source)
 }
 func (s *mobileWorkflowService) Get(id string) (mobile.Task, bool) {
 	s.stateMu.Lock()
@@ -238,9 +205,6 @@ func (s *mobileWorkflowService) revoke() {
 		cancel()
 	}
 	s.mu.Unlock()
-}
-func mobileWorkflowActive(task mobile.Task) bool {
-	return task.State == "queued" || task.State == "running"
 }
 
 // Clearing a workflow must stop it without erasing its last verified
@@ -482,47 +446,12 @@ func (s *mobileWorkflowService) Devices(ctx context.Context) (json.RawMessage, e
 	return json.RawMessage(raw), nil
 }
 func (s *mobileWorkflowService) Screenshot(taskID, observationID string) ([]byte, error) {
-	task, ok := s.Get(taskID)
-	if !ok || task.ObservationID != observationID || !regexpMobileObservation(observationID) {
-		return nil, errors.New("device_observation_not_found")
-	}
-	return s.readBlob("observations", observationID+".png", 128<<20)
+	task, _ := s.Get(taskID)
+	return readMobileScreenshot(s.manager.dir, task, observationID)
 }
 func (s *mobileWorkflowService) Artifact(taskID, artifactID string) (mobile.Artifact, []byte, error) {
-	task, ok := s.Get(taskID)
-	if !ok {
-		return mobile.Artifact{}, nil, errors.New("device_recording_not_found")
-	}
-	for _, artifact := range task.Artifacts {
-		if artifact.ID == artifactID && validID(artifactID) {
-			data, err := s.readBlob("recordings", artifactID+".mp4", 128<<20)
-			if err == nil && (namedSpeechSHA(data) != artifact.SHA256 || len(data) != artifact.Bytes) {
-				err = errors.New("device_recording_integrity_invalid")
-			}
-			return artifact, data, err
-		}
-	}
-	return mobile.Artifact{}, nil, errors.New("device_recording_not_found")
-}
-func regexpMobileObservation(id string) bool {
-	return len(id) == 36 && strings.HasPrefix(id, "obs-") && strings.Trim(id[4:], "0123456789abcdef") == ""
-}
-func (s *mobileWorkflowService) readBlob(directory, name string, limit int64) ([]byte, error) {
-	root, err := workspacefs.EnsurePath(filepath.Join(s.manager.dir, "mobile", directory))
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	file, err := workspacefs.OpenRegular(root, name)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil || int64(len(data)) > limit {
-		return nil, errors.New("device_artifact_exceeds_host_memory_budget")
-	}
-	return data, nil
+	task, _ := s.Get(taskID)
+	return readMobileArtifact(s.manager.dir, task, artifactID)
 }
 
 var _ deviceService = (*mobileWorkflowService)(nil)
@@ -1401,7 +1330,7 @@ func (s *mobileWorkflowService) execute(ctx context.Context, task mobile.Task, s
 		if json.Unmarshal(snapshot.records[task.ID].State, &metadata) != nil || metadata.Artifact.ID != args.ArtifactID {
 			return nil, errors.New("device_artifact_invalid")
 		}
-		data, err := s.readBlob("recordings", metadata.Artifact.ID+".mp4", 128<<20)
+		data, err := readMobileBlob(s.manager.dir, "recordings", metadata.Artifact.ID+".mp4", 128<<20)
 		if err != nil {
 			return nil, err
 		}
@@ -1495,7 +1424,7 @@ func (s *mobileWorkflowService) observation(taskID, id string) (mobile.Observati
 	if json.Unmarshal(snapshot.records[taskID].State, &metadata) != nil || metadata.Observation.ID != id {
 		return mobile.Observation{}, errors.New("device_observation_not_found")
 	}
-	data, err := s.readBlob("observations", id+".png", 128<<20)
+	data, err := readMobileBlob(s.manager.dir, "observations", id+".png", 128<<20)
 	if err != nil {
 		return mobile.Observation{}, err
 	}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "service": "station-yue",
+  "protocol": "station-yue-host",
+  "protocol_version": 1,
+  "ownership": "host-managed-local-direct",
+  "operations": {
+    "health": "health",
+    "submit": "submit_generation",
+    "lookup": "lookup_request",
+    "status": "job_status",
+    "cancel": "cancel_job",
+    "artifact": "verified_artifact"
+  },
+  "constraints": {
+    "backend": "administrator-registered official local YuE installation only",
+    "reference": "host-authorized artifact reference only",
+    "output": "host-verified artifact only",
+    "delivery": "host-owned; not part of this tool"
+  },
+  "execution": "This descriptor is declarative. Only the station host may start the approved local YuE adapter or create jobs; generic MCP execution must not execute this file."
+}

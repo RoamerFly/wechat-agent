@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace WechatAgent.Desktop {
@@ -31,7 +32,7 @@ namespace WechatAgent.Desktop {
         static int Main(string[] args) {
             IntPtr desktop=IntPtr.Zero; ProcessInfo info=new ProcessInfo();
             try {
-                if(args.Length!=1)throw new ArgumentException("Expected one window-test executable");
+                if(args.Length<1)throw new ArgumentException("Expected a window-test executable");
                 string path=Path.GetFullPath(args[0]), name="WechatAgentTests-"+Guid.NewGuid().ToString("N");
                 // On the hosted GitHub runner, WebView2 initialization failed
                 // with Invalid window handle (0x80070578) on the secondary
@@ -47,7 +48,8 @@ namespace WechatAgent.Desktop {
                     if(desktop==IntPtr.Zero)throw new Win32Exception();
                 }
                 var startup=new Startup { cb=Marshal.SizeOf(typeof(Startup)), desktop=githubActions ? null : "winsta0\\"+name, flags=0x100, input=GetStdHandle(-10), output=GetStdHandle(-11), error=GetStdHandle(-12) };
-                if(!CreateProcess(path,new System.Text.StringBuilder(HiddenRunner.Quote(path)),IntPtr.Zero,IntPtr.Zero,true,0x08000004,IntPtr.Zero,Path.GetDirectoryName(path),ref startup,out info))throw new Win32Exception();
+                string command=String.Join(" ",args.Select(HiddenRunner.Quote));
+                if(!CreateProcess(path,new System.Text.StringBuilder(command),IntPtr.Zero,IntPtr.Zero,true,0x08000004,IntPtr.Zero,Path.GetDirectoryName(path),ref startup,out info))throw new Win32Exception();
                 using(var child=Process.GetProcessById(info.pid))using(var job=new ProcessJob()) {
                     job.Assign(child); ResumeThread(info.thread);
                     var deadline=DateTime.UtcNow.AddMinutes(2);

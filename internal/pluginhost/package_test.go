@@ -53,8 +53,8 @@ func TestOfficialContracts(t *testing.T) {
 		}
 	}
 	dirs = folders
-	if len(dirs) != 10 {
-		t.Fatalf("expected 10 capability packages, got %d", len(dirs))
+	if len(dirs) != 16 {
+		t.Fatalf("expected 16 capability packages, got %d", len(dirs))
 	}
 	for _, d := range dirs {
 		t.Run(d.Name(), func(t *testing.T) {
@@ -62,8 +62,12 @@ func TestOfficialContracts(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" {
-				if p.Status != "ready" || p.Runtime.Transport != "mcp-stdio" || p.Runtime.Entrypoint != "runtime/main.py" {
+			if d.Name() == "web-search" || d.Name() == "media-understanding" || d.Name() == "speech" || d.Name() == "music" || d.Name() == "share-reader" || d.Name() == "mobile-control" || d.Name() == "project-development" || d.Name() == "external-tools" || d.Name() == "document-workshop" || d.Name() == "audio-workshop" || d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "obs-preview" {
+				transport, entrypoint := "mcp-stdio", "runtime/main.py"
+				if d.Name() == "rvc" || d.Name() == "comfyui" || d.Name() == "yue" || d.Name() == "station-speech" || d.Name() == "obs-preview" {
+					transport, entrypoint = "http-adapter", "runtime/managed-service.json"
+				}
+				if p.Status != "ready" || p.Runtime.Transport != transport || p.Runtime.Entrypoint != entrypoint {
 					t.Fatal("web runtime not connected")
 				}
 				if d.Name() != "web-search" {
@@ -99,9 +103,45 @@ func TestOfficialContracts(t *testing.T) {
 						}
 					}
 					if d.Name() == "document-workshop" {
-						want = map[string]bool{"document.inspect": true, "document.reconstruct": true, "document.export_pdf": true, "document.verify": true}
+						want = map[string]bool{"document.inspect": true, "document.reconstruct": true, "document.revise_title": true, "document.export_pdf": true, "document.verify": true}
 						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
 							t.Fatal("document workshop must use only artifact read/write permissions")
+						}
+					}
+					if d.Name() == "audio-workshop" {
+						want = map[string]bool{"audio.prepare": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" {
+							t.Fatal("audio workshop must use only artifact read/write permissions")
+						}
+					}
+					if d.Name() == "rvc" {
+						want = map[string]bool{"rvc.convert": true}
+						if len(p.Permissions) != 3 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" || p.Permissions[2] != "gpu" {
+							t.Fatal("rvc package must declare only artifact read/write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "comfyui" {
+						want = map[string]bool{"comfyui.workflows": true, "comfyui.run": true, "comfyui.job": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.write" || p.Permissions[1] != "gpu" {
+							t.Fatal("comfyui package must declare only artifact write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "yue" {
+						want = map[string]bool{"yue.generate": true, "yue.job": true}
+						if len(p.Permissions) != 3 || p.Permissions[0] != "artifact.read" || p.Permissions[1] != "artifact.write" || p.Permissions[2] != "gpu" {
+							t.Fatal("YuE package must declare only artifact read/write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "station-speech" {
+						want = map[string]bool{"station-speech.voices": true, "station-speech.synthesize": true, "station-speech.job": true}
+						if len(p.Permissions) != 2 || p.Permissions[0] != "artifact.write" || p.Permissions[1] != "gpu" {
+							t.Fatal("station speech package must declare only artifact write and explicit GPU permissions")
+						}
+					}
+					if d.Name() == "obs-preview" {
+						want = map[string]bool{"obs.preview": true}
+						if len(p.Permissions) != 1 || p.Permissions[0] != "network" {
+							t.Fatal("OBS preview must declare only the bounded local network proxy")
 						}
 					}
 					raw, err := os.ReadFile(filepath.Join("../../plugins", d.Name(), "capabilities.json"))
@@ -116,7 +156,7 @@ func TestOfficialContracts(t *testing.T) {
 					}
 					for _, cap := range doc.Capabilities {
 						if want[cap.ID] {
-							if cap.Implementation != "ready" || !cap.Discoverable {
+							if cap.Implementation != "ready" || (d.Name() != "obs-preview" && !cap.Discoverable) || (d.Name() == "obs-preview" && cap.Discoverable) {
 								t.Fatal("implemented capability hidden", cap.ID)
 							}
 							if d.Name() == "mobile-control" {
@@ -170,6 +210,124 @@ func TestOfficialContracts(t *testing.T) {
 							}
 							if d.Name() == "media-understanding" && (cap.Async || len(cap.Permissions) != 2 || cap.Permissions[0] != "artifact.read" || cap.Permissions[1] != "model.invoke") {
 								t.Fatal("media capability must remain synchronous and use only artifact/model proxies", cap.ID)
+							}
+							if d.Name() == "rvc" && (!cap.Async || cap.SideEffect != "artifact" || len(cap.Permissions) != 3 || cap.Permissions[0] != "artifact.read" || cap.Permissions[1] != "artifact.write" || cap.Permissions[2] != "gpu") {
+								t.Fatal("rvc conversion must remain asynchronous and use only artifact/GPU host authorities", cap.ID)
+							}
+							if d.Name() == "comfyui" {
+								wantPermissions := []string{"gpu"}
+								if cap.ID != "comfyui.workflows" {
+									wantPermissions = []string{"artifact.write", "gpu"}
+								}
+								if (cap.ID == "comfyui.run") != cap.Async || len(cap.Permissions) != len(wantPermissions) {
+									t.Fatal("comfyui capability must retain its scoped asynchronous contract", cap.ID)
+								}
+								for i, permission := range wantPermissions {
+									if cap.Permissions[i] != permission {
+										t.Fatal("comfyui capability permission changed", cap.ID, cap.Permissions)
+									}
+								}
+							}
+							if d.Name() == "yue" {
+								wantPermissions := []string{"artifact.read", "artifact.write", "gpu"}
+								if (cap.ID == "yue.generate") != cap.Async || len(cap.Permissions) != len(wantPermissions) {
+									t.Fatal("YuE capability must retain its scoped asynchronous contract", cap.ID)
+								}
+								for i, permission := range wantPermissions {
+									if cap.Permissions[i] != permission {
+										t.Fatal("YuE capability permission changed", cap.ID, cap.Permissions)
+									}
+								}
+							}
+							if d.Name() == "station-speech" {
+								wantPermissions := []string{"artifact.write", "gpu"}
+								if cap.Async || len(cap.Permissions) != len(wantPermissions) {
+									t.Fatal("station speech capability must wait within the original local chat turn", cap.ID)
+								}
+								for i, permission := range wantPermissions {
+									if cap.Permissions[i] != permission {
+										t.Fatal("station speech capability permission changed", cap.ID, cap.Permissions)
+									}
+								}
+							}
+							if d.Name() == "rvc" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil || len(schema.Properties) != 3 || schema.Properties["artifact_id"] == nil || schema.Properties["voice_profile_id"] == nil || schema.Properties["title"] == nil || len(schema.Required) != 2 || schema.Required[0] != "artifact_id" || schema.Required[1] != "voice_profile_id" {
+									t.Fatal("rvc conversion must require only artifact_id and voice_profile_id, with optional title")
+								}
+							}
+							if d.Name() == "comfyui" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil {
+									t.Fatal(err)
+								}
+								switch cap.ID {
+								case "comfyui.workflows":
+									if len(schema.Properties) != 0 || len(schema.Required) != 0 {
+										t.Fatal("comfyui workflow inventory must take no arguments")
+									}
+								case "comfyui.run":
+									if len(schema.Properties) != 3 || schema.Properties["workflow_id"] == nil || schema.Properties["inputs"] == nil || schema.Properties["title"] == nil || len(schema.Required) != 1 || schema.Required[0] != "workflow_id" {
+										t.Fatal("comfyui run must require only workflow_id with optional typed inputs and title")
+									}
+								case "comfyui.job":
+									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
+										t.Fatal("comfyui job must require only job_id and action")
+									}
+								}
+							}
+							if d.Name() == "yue" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil {
+									t.Fatal(err)
+								}
+								switch cap.ID {
+								case "yue.generate":
+									for _, name := range []string{"mode", "style", "lyrics", "duration_seconds", "min_duration_seconds", "text_guidance_scale", "seed", "vocal_gender", "planning_mode", "reference_mode", "sampling", "reference_artifact_id"} {
+										if schema.Properties[name] == nil {
+											t.Fatal("YuE generate missing input", name)
+										}
+									}
+									if len(schema.Required) != 4 || schema.Required[0] != "mode" || schema.Required[1] != "style" || schema.Required[2] != "lyrics" || schema.Required[3] != "duration_seconds" {
+										t.Fatal("YuE generate must require mode/style/lyrics/duration_seconds")
+									}
+								case "yue.job":
+									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
+										t.Fatal("YuE job must require only job_id and action")
+									}
+								}
+							}
+							if d.Name() == "station-speech" {
+								var schema struct {
+									Properties map[string]json.RawMessage `json:"properties"`
+									Required   []string                   `json:"required"`
+								}
+								if err := json.Unmarshal(cap.InputSchema, &schema); err != nil {
+									t.Fatal(err)
+								}
+								switch cap.ID {
+								case "station-speech.voices":
+									if len(schema.Properties) != 0 || len(schema.Required) != 0 {
+										t.Fatal("station speech voice inventory must take no arguments")
+									}
+								case "station-speech.synthesize":
+									if len(schema.Properties) != 4 || schema.Properties["voice_id"] == nil || schema.Properties["text"] == nil || schema.Properties["speed"] == nil || schema.Properties["text_language"] == nil || len(schema.Required) != 2 || schema.Required[0] != "voice_id" || schema.Required[1] != "text" {
+										t.Fatal("station speech synthesis must require only voice_id and text, with optional speed and text_language")
+									}
+								case "station-speech.job":
+									if len(schema.Properties) != 2 || schema.Properties["job_id"] == nil || schema.Properties["action"] == nil || len(schema.Required) != 2 || schema.Required[0] != "job_id" || schema.Required[1] != "action" {
+										t.Fatal("station speech recovery must require only job_id and action")
+									}
+								}
 							}
 							delete(want, cap.ID)
 						} else if cap.Implementation != "migration-pending" || cap.Discoverable {

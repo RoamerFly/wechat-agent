@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"wechat-bot/internal/linuxnative"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -42,14 +43,14 @@ func TestLocalASRStatusRequiresInstalledConfiguredRegisteredPlugin(t *testing.T)
 	}
 
 	fixture, _, policy, ctx := mediaPolicyFixture(t, false)
-	installed, err := policy.store.Installed(ctx, localASRPluginID)
+	installed, err := policy.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false); err != nil {
+	if _, err = policy.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false); err != nil {
 		t.Fatal(err)
 	}
-	configuration, err := policy.store.Configuration(ctx, localASRPluginID)
+	configuration, err := policy.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,14 +60,14 @@ func TestLocalASRStatusRequiresInstalledConfiguredRegisteredPlugin(t *testing.T)
 	}
 	values["asr_backend"] = json.RawMessage(`"local"`)
 	values["local_asr_profile_id"] = json.RawMessage(`"sensevoice-small-int8"`)
-	if _, err = policy.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
+	if _, err = policy.store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = policy.store.Installed(ctx, localASRPluginID)
+	installed, err = policy.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = policy.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	if status := fixture.manager.localASRStatus(); status["available"] != false || status["message"] != "本地语音识别资源尚未登记或已失效" {

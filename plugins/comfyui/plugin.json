@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "comfyui",
+  "name": "ComfyUI 图像生成",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64"],
+  "runtime": {"transport": "http-adapter", "entrypoint": "runtime/managed-service.json"},
+  "permissions": ["artifact.write", "gpu"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "24a8dc10f8f9de2cc35b69ec3062a56b195aab28c1cfe1ffb6495ec57d8a41f9",
+    "CHANGELOG.md": "076afe48efe665d0ef8e5efedfafa0899b5f533e56b0962dcbd78dfc9be0d8f5",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "b73e1539faa3767bf605377615eae14362a7518f976fa6c5f808adb74a15ade4",
+    "PERMISSIONS.md": "81cefbef0969b6ad56714106dedaea57817950f8953917b59b604226a507cfb4",
+    "README.md": "dc20bf42a245c62d69ec0ce41b039d189daacfe1bc5a31a5e88429218e8e9a99",
+    "runtime/managed-service.json": "ad4e9f12f8adacc66c705a9ed0a15702b5477eddddb400f20bb03846d4413556",
+    "ui.schema.json": "75ad213c4b6ede6a8196e79fa72c5e3971c6acb8dfa9299bbc9538b86cfadd02"
+  }
+}

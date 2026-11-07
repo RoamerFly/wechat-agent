@@ -32,27 +32,56 @@ type mediaSender interface {
 	SendMedia(context.Context, string, string, string) (linuxnative.ToolStatus, error)
 }
 type Config struct {
-	ObservationFailed   func(companion.Input, string) error
-	MediaRepairRequired func(companion.Input, string, string) error
-	MediaSeedSettled    func(string, string, linuxnative.ToolStatus) error
-	MediaSeedReceipt    func(string, string) (linuxnative.ToolStatus, bool)
-	BacklogSettled      func(string, string, []string, string)
-	AuthorizeThread     func(context.Context, string) (bool, error)
-	AgentTask           func(time.Time, func(string) bool) (*companion.Input, error)
-	AgentTaskDone       func(companion.Input, string)
-	AgentTaskRetry      func(companion.Input, time.Duration, string)
-	AgentTaskDelivery   func(companion.Input, TaskDelivery) error
-	AgentTaskActive     func(companion.Input) bool
-	Draining            func() bool
-	MediaSeedAllowed    func(MediaSeed) bool
-	MediaSeedKnown      func(MediaSeed) bool
-	MediaSeeds          func() []MediaSeed
-	SurfAllowed         func(string) bool
-	SurfTask            func(time.Time) (*SurfTask, error)
-	Options             *Options
-	Analyzer            interface {
+	// DeliveryCancelled is a durable host fence for an originating turn.
+	DeliveryCancelled func(companion.Input) (bool, error)
+	// WithDeliverySubmit serializes the final native submission with that fence.
+	WithDeliverySubmit func(context.Context, companion.Input, func() error) error
+	NextMediaResume    func(time.Time) (*MediaResumeRequest, error)
+	MediaResumeResult  func(MediaResumeRequest, MediaResumeResult) error
+	BeforeSubmit       func(context.Context) error
+	ObservationFailed  func(companion.Input, string) error
+	// PreferredGroupShare is an explicit host rule for a received group share.
+	// It is deliberately separate from free-form conversation preferences: the
+	// host owns both the authorization and the exact card shape that may cause
+	// an automatic summary.
+	PreferredGroupShare func(linuxnative.Message) bool
+	// OnDemandAttachment marks an ordinary inbound attachment that the host can
+	// expose through a tool when the model asks for it. Such files are normal
+	// conversation inputs, but they must not be forced through the legacy
+	// generic media analyzer before the model has decided that reading is useful.
+	OnDemandAttachment func(linuxnative.Message) bool
+	// ReadPreferredGroupShare reads a host-authorized share only after its
+	// source has been persisted and bound to input. The returned text must be
+	// backed by firsthand observation evidence; a card title alone is never
+	// enough to generate an automatic group reply.
+	ReadPreferredGroupShare func(context.Context, companion.Input, linuxnative.Message) (string, MediaObservationEvidence, error)
+	MediaRepairRequired     func(companion.Input, string, string) error
+	MediaSeedSettled        func(string, string, linuxnative.ToolStatus) error
+	MediaSeedReceipt        func(string, string) (linuxnative.ToolStatus, bool)
+	BacklogSettled          func(string, string, []string, string)
+	AuthorizeThread         func(context.Context, string) (bool, error)
+	AuthorizeReply          func(companion.Input) bool
+	AuthorizeMedia          func(companion.Input) bool
+	AuthorizeMediaAsset     func(companion.Input, string, string) bool
+	AuthorizeMediaSubmit    func(context.Context, companion.Input, string, string) bool
+	PrepareMediaSource      func(context.Context, companion.Input, string, string) (string, error)
+	AgentTask               func(time.Time, func(string) bool) (*companion.Input, error)
+	AgentTaskDone           func(companion.Input, string)
+	AgentTaskRetry          func(companion.Input, time.Duration, string)
+	AgentTaskDelivery       func(companion.Input, TaskDelivery) error
+	AgentTaskActive         func(companion.Input) bool
+	Draining                func() bool
+	MediaSeedAllowed        func(MediaSeed) bool
+	MediaSeedKnown          func(MediaSeed) bool
+	MediaSeeds              func() []MediaSeed
+	SurfAllowed             func(string) bool
+	SurfTask                func(time.Time) (*SurfTask, error)
+	Options                 *Options
+	Analyzer                interface {
 		Analyze(context.Context, linuxnative.Message) (string, error)
 	}
+	// ScopedAnalyzer handles only the inbound media types selected by the host.
+	ScopedAnalyzer ScopedMediaAnalyzer
 	StateDir       string
 	AllowedThreads []string
 	Prefix         string
@@ -63,6 +92,21 @@ type Config struct {
 	GroupRules     map[string]GroupRule
 	Channel        string
 }
+
+func (w *Worker) beforeSubmit(ctx context.Context) error {
+	if w.config.BeforeSubmit != nil {
+		return w.config.BeforeSubmit(ctx)
+	}
+	return nil
+}
+
+func (w *Worker) authorizedMessage(message linuxnative.Message) bool {
+	return w.config.AuthorizeReply == nil || w.config.AuthorizeReply(companion.Input{
+		Account: message.AccountID, Thread: message.ThreadID, MessageTime: message.CreatedAt,
+	})
+}
+
+var errSubmissionDeferred = errors.New("delivery_waiting_for_connection")
 
 // MediaObservationEvidence is supplied only by a trusted host observer that
 // actually decoded incoming media. It is intentionally separate from the text
@@ -80,16 +124,17 @@ type GroupRule struct {
 	ForceReplyWhenMentioned bool
 }
 type Worker struct {
-	generation      *generationScheduler
-	runtime         *runtimeState
-	persistErr      error
-	recovering      bool
-	config          Config
-	source          Source
-	model           Model
-	sender          sending.Engine
-	allowed         map[string]bool
-	lastMaintenance time.Time
+	generation       *generationScheduler
+	mediaPreparation *mediaPreparation
+	runtime          *runtimeState
+	persistErr       error
+	recovering       bool
+	config           Config
+	source           Source
+	model            Model
+	sender           sending.Engine
+	allowed          map[string]bool
+	lastMaintenance  time.Time
 }
 
 func New(config Config, source Source, model Model, sender sending.Engine) (*Worker, error) {
@@ -243,6 +288,10 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	if message.ThreadID != event.Data.ThreadID || message.Direction != event.Data.Direction {
 		return
 	}
+	if !w.authorizedMessage(message) {
+		w.queuePhase(message.ID, "skipped")
+		return
+	}
 	// Historical reviews are processed in order. A later recovered message
 	// must not interrupt a previous review before it has had a model decision
 	// and completed its already queued delivery.
@@ -276,7 +325,10 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	working := quotedPlainBody(message)
 	isMedia := message.Type == 34 || message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && !message.IsQuotedText()
-	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
+	preferredShare := w.preferredGroupShare(message)
+	onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(message)
+	canAnalyze := isMedia && w.mediaAnalyzer(ctx, message) != nil
+	if isMedia && w.config.Options != nil && (onDemandAttachment || canAnalyze || preferredShare && w.config.ReadPreferredGroupShare != nil || w.addressed(message)) {
 		working.Type = 1
 		working.Body = "收到了一张图片，请结合内容决定是否回应。"
 		if message.Type == 47 {
@@ -298,7 +350,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 			working.Body = w.config.Prefix + working.Body
 		}
 	}
-	prompt, eligible := w.promptWithSharePreference(working, time.Now(), w.considerPreferredShare(message))
+	prompt, eligible := w.promptWithSharePreference(working, time.Now(), preferredShare)
 	noticed := message
 	if message.IsQuotedText() {
 		noticed = working
@@ -341,7 +393,7 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	w.activity(Record{Event: "message_processing", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: processingReason, Status: "processing"})
 	readMedia := isMedia && w.readMediaBeforeDecision(message)
-	if isMedia && w.config.Options != nil && w.config.Analyzer != nil {
+	if canAnalyze && !onDemandAttachment && w.config.Options != nil {
 		if !w.observationAllowed(message) {
 			w.activity(Record{Event: "message_skipped", Category: "decision", ThreadID: message.ThreadID, MessageID: message.ID, Reason: "media_understanding_disabled", Status: "skipped"})
 			return
@@ -376,7 +428,8 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 	}
 	if character, ok := w.model.(*companion.Engine); ok {
 		mode := "direct"
-		if (w.config.GroupRules[message.ThreadID].Mode == "social" || w.considerPreferredShare(message)) && !w.addressed(message) {
+		legacyPreferredShare := preferredShare && w.config.PreferredGroupShare == nil
+		if (w.config.GroupRules[message.ThreadID].Mode == "social" || legacyPreferredShare) && !w.addressed(message) {
 			mode = "social"
 		}
 		input := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: message.ThreadID, Sender: message.SenderID, Text: prompt, Mode: mode, IsGroup: strings.HasSuffix(message.ThreadID, "@chatroom"), Directed: !strings.HasSuffix(message.ThreadID, "@chatroom") || w.addressed(message), ReviewRequired: reviewQuestion, HistoricalReview: w.ownerModelReview(message.ID), PersonaOverride: w.config.GroupRules[message.ThreadID].Persona, TraceID: message.ID, QuoteServerID: message.ServerID, MessageTime: message.CreatedAt, MustReply: mode == "direct" && message.Mentions.Self != nil && *message.Mentions.Self && w.config.GroupRules[message.ThreadID].ForceReplyWhenMentioned}
@@ -390,7 +443,26 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		input.OriginalText = &original
 		bindInputSource(&input, message, character)
+		input.Source.Sequence = sourceSequence(event)
+		if preferredShare && w.config.ReadPreferredGroupShare != nil {
+			if err := w.persistPreferredGroupShareSource(character, &input); err != nil {
+				w.stopUnreadableTurn(input, err)
+				return
+			}
+			// This is an administrator-authorized automatic share summary, not an
+			// @ mention and not an inferred member instruction. Station policy
+			// authorizes it again from this durable marker at delivery time.
+			input.GroupShareSummary = true
+			if !w.addressed(message) {
+				input.Mode = "direct"
+				input.Directed = false
+				input.MustReply = false
+			}
+		}
 		for i := range input.IncomingMedia {
+			if mediaObservationState == "pending" && input.IncomingMedia[i].ObservationState == "observed" {
+				continue
+			}
 			input.IncomingMedia[i].ObservationState = mediaObservationState
 			if mediaObservationState != "pending" {
 				input.IncomingMedia[i].Observation = prompt
@@ -412,12 +484,18 @@ func (w *Worker) handle(ctx context.Context, event linuxnative.Event) {
 		}
 		if w.generation != nil {
 			var analysis *linuxnative.Message
-			if readMedia && w.config.Analyzer != nil {
+			if input.GroupShareSummary || readMedia && canAnalyze && !onDemandAttachment {
 				copy := message
 				analysis = &copy
 			}
 			w.startGeneration(ctx, character, input, analysis)
 		} else {
+			if input.GroupShareSummary {
+				if err := w.readPreparedPreferredGroupShare(ctx, character, &input, message); err != nil {
+					w.stopUnreadableTurn(input, err)
+					return
+				}
+			}
 			w.respondCharacter(ctx, character, input)
 		}
 		return
@@ -818,6 +896,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			return
 		}
 		input = bound
+		if w.beforeSubmit(ctx) != nil {
+			return
+		}
 		w.markSending(input.TraceID)
 		if w.persistErr != nil {
 			return
@@ -870,6 +951,9 @@ func (w *Worker) finishCharacter(ctx context.Context, character *companion.Engin
 			sourceID = media.ID
 		}
 		sender := w.sender.(mediaSender)
+		if w.beforeSubmit(ctx) != nil {
+			return
+		}
 		w.markSending(input.TraceID)
 		if w.persistErr != nil {
 			return

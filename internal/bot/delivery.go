@@ -122,11 +122,17 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 		return sending.Receipt{}, errors.New("surf_share_permission_changed")
 	}
 	native, ok := w.sender.(reliableNative)
+	if w.beforeSubmit(ctx) != nil {
+		return sending.Receipt{}, errSubmissionDeferred
+	}
 	if !ok || w.runtime == nil {
 		var err error
 		input, text, err = w.prepareGroundedText(ctx, input, text)
 		if err != nil {
 			return sending.Receipt{}, replyAdmissionFailure(err)
+		}
+		if err := w.beforeSubmit(ctx); err != nil {
+			return sending.Receipt{}, err
 		}
 		return w.sender.SendText(ctx, sending.TextRequest{Recipient: input.Thread, Text: text})
 	}
@@ -147,6 +153,9 @@ func (w *Worker) sendText(ctx context.Context, input companion.Input, bubble int
 	var err error
 	input, text, err = w.prepareGroundedText(ctx, input, text)
 	if err != nil {
+		if w.beforeSubmit(ctx) != nil {
+			return sending.Receipt{}, errSubmissionDeferred
+		}
 		return sending.Receipt{}, replyAdmissionFailure(err)
 	}
 	d := &delivery{Trace: input.TraceID, Thread: input.Thread, Text: text, Bubble: bubble, Created: time.Now().UTC(), State: "prepared", Input: input}
@@ -180,7 +189,14 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 		if w.deliveryCancelled(d) {
 			return w.cancelledDelivery(d)
 		}
+		deferred := &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: errSubmissionDeferred.Error()}
+		if w.beforeSubmit(ctx) != nil {
+			return sending.Receipt{}, deferred
+		}
 		in, text, validationErr := w.prepareGroundedText(ctx, d.Input, d.Text)
+		if w.beforeSubmit(ctx) != nil {
+			return sending.Receipt{}, deferred
+		}
 		if validationErr != nil {
 			failure := replyAdmissionFailure(validationErr)
 			d.State, d.Reason = "stopped", sending.FailureReason(failure)
@@ -193,13 +209,22 @@ func (w *Worker) submitDelivery(ctx context.Context, n reliableNative, d *delive
 			w.persistErr = w.saveRuntime()
 			return sending.Receipt{}, &sending.OutcomeError{Cause: sending.ErrOutcomeUnknown, Reason: "delivery_pacing"}
 		}
+		previousState, previousText := d.State, d.SubmittedText
 		d.State = "submitting"
 		d.SubmittedText = d.Text
 		w.advanceSendGate(d.Thread)
 		if e := w.saveRuntime(); e != nil {
 			return sending.Receipt{}, e
 		}
-		status, err = n.Submit(ctx, linuxnative.ToolSend{ThreadID: d.Thread, Kind: "text", Text: d.Text, IdempotencyKey: d.Key, Quote: d.Quote})
+		err = w.guardedDeliverySubmit(ctx, d.Input, func() error {
+			var sendErr error
+			status, sendErr = n.Submit(ctx, linuxnative.ToolSend{ThreadID: d.Thread, Kind: "text", Text: d.Text, IdempotencyKey: d.Key, Quote: d.Quote})
+			return sendErr
+		})
+		if errors.Is(err, ErrDeliveryCancelled) {
+			d.State, d.SubmittedText = previousState, previousText
+			return w.cancelledDelivery(d)
+		}
 		if err != nil {
 			if reason := linuxnative.QuoteAdmissionReason(err); reason != "" {
 				d.State, d.Reason = "stopped", reason
@@ -423,7 +448,15 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 				continue
 			}
 		}
-		if !w.allowed[d.Thread] {
+		if w.config.AuthorizeReply != nil && !w.config.AuthorizeReply(d.Input) {
+			if d.State != "cancelled_reconciling" {
+				_, _ = w.cancelledDelivery(d)
+				if w.persistErr != nil {
+					return
+				}
+				continue
+			}
+		} else if !w.allowed[d.Thread] {
 			d.State = "stopped"
 			d.Reason = "conversation_not_allowed"
 			w.activity(Record{Event: "delivery_stopped", Category: "decision", ThreadID: d.Thread, MessageID: d.Trace, Reason: "conversation_not_allowed", Status: "blocked", SendID: d.ID})
@@ -521,6 +554,10 @@ func (w *Worker) reconcileDeliveries(ctx context.Context) {
 			d.State = "stopped"
 			w.activity(Record{Event: "send_failed", Category: "error", ThreadID: d.Thread, MessageID: d.Trace, Content: d.Text, Reason: status.Reason, Status: "failed", SendID: d.ID})
 			w.persistErr = w.saveRuntime()
+			continue
+		}
+		if d.Cancelled && w.config.AuthorizeReply != nil && !w.config.AuthorizeReply(d.Input) {
+			w.deferReceiptLookup(d, "revoked_delivery_receipt_unverified")
 			continue
 		}
 		confirmedRetryable := err == nil && status.State == "failed" && status.Retryable

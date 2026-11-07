@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "service": "station-comfyui",
+  "protocol": "station-comfyui-broker",
+  "protocol_version": 1,
+  "ownership": "host-managed-loopback",
+  "operations": {
+    "health": "health",
+    "workflows": "registered_workflows",
+    "submit": "submit_workflow",
+    "lookup": "lookup_request",
+    "status": "job_status",
+    "cancel": "cancel_job",
+    "artifact": "verified_artifact"
+  },
+  "constraints": {
+    "workflow": "host-registered workflow_id only",
+    "inputs": "host-validated scalar inputs only",
+    "output": "host-verified artifact only",
+    "delivery": "host-owned; not part of this tool"
+  },
+  "execution": "This descriptor is declarative. Only the station host may bind the loopback broker or create jobs; generic MCP execution must not execute this file."
+}

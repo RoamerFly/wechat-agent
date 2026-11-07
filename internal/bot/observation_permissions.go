@@ -6,7 +6,7 @@ import "wechat-bot/internal/linuxnative"
 // remain available for the session's file tools even with vision disabled.
 // Conversation eligibility and source identity are checked independently.
 func (w *Worker) observationAllowed(m linuxnative.Message) bool {
-	if w.config.Options == nil {
+	if w.config.Options == nil || w.hasScopedMedia(m) {
 		return true
 	}
 	if m.FileAttachmentName() != "" {

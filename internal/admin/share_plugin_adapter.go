@@ -2,9 +2,7 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -12,13 +10,13 @@ import (
 	"sync"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
-	"wechat-bot/internal/sharespec"
 )
 
 func (m *Manager) installedShareState(ctx context.Context) (bool, error) {
@@ -43,14 +41,6 @@ func (m *Manager) installedServiceState(ctx context.Context, id, prefix string) 
 	return true, nil
 }
 
-// This fingerprint contains original native identity/content, not observations
-// or display names. Only its hash is kept in an ephemeral task's source metadata.
-func shareNativeFingerprint(m linuxnative.Message) string {
-	b, _ := json.Marshal([]any{m.AccountID, m.ThreadID, m.ID, m.SenderID, m.ServerID, m.CreatedAt, m.Direction, m.Type, m.AppMessageType, m.Body, m.Link})
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
 type receivedSharePolicy struct {
 	manager            *Manager
 	store              *pluginhost.Store
@@ -68,7 +58,7 @@ type receivedSharePolicy struct {
 	resolutionSnapshotSuffix string
 	timeoutSeconds           int64
 	actor                    *sourceActorProof
-	binding                  *shareRouteBinding
+	binding                  *wechatapp.BoundChannelsRoute
 	send                     pluginruntime.RouteTransport
 	failureMu                sync.Mutex
 	failure                  *shareResolutionFailure
@@ -164,8 +154,8 @@ func (m *Manager) newExplicitPublicURLSourcePolicy(ctx context.Context, message 
 }
 
 func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linuxnative.Message, tool string, explicitPublicURL bool) (*receivedSharePolicy, error) {
-	validKind := message.AppMessageType != nil && (*message.AppMessageType == 51 && tool == "share.resolve_channels" || (*message.AppMessageType == 4 || *message.AppMessageType == 5) && tool == "share.resolve_public" && message.Link != nil && sharePublicURL(message.Link.URL) != "")
-	validKind = message.Type == 49 && validKind || tool == "media.observe" && (message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && message.AppMessageType != nil && (*message.AppMessageType == 4 || *message.AppMessageType == 5 || *message.AppMessageType == 51)) || tool == "media.transcribe" && (message.Type == 34 || message.Type == 43 || message.Type == 49) || tool == "media.listen" && message.Type == 34
+	resolver, _ := wechatapp.ShareReadCapability(message)
+	validKind := resolver != "" && resolver == tool || tool == "media.observe" && (message.Type == 3 || message.Type == 47 || message.Type == 43 || message.Type == 49 && message.AppMessageType != nil && (*message.AppMessageType == 4 || *message.AppMessageType == 5 || *message.AppMessageType == 51)) || tool == "media.transcribe" && (message.Type == 34 || message.Type == 43 || message.Type == 49) || tool == "media.listen" && message.Type == 34
 	if explicitPublicURL {
 		validKind = tool == "share.resolve_public"
 	}
@@ -186,7 +176,7 @@ func (m *Manager) newReceivedSharePolicyInner(ctx context.Context, message linux
 	if err != nil {
 		return nil, err
 	}
-	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: receivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
+	p := &receivedSharePolicy{manager: m, store: store, message: message, tool: tool, fingerprint: wechatapp.ReceivedSourceFingerprint(message, tool), epoch: epoch, remember: m.Config().Companion.Permissions.Remember, send: mcptools.PostPluginRoute}
 	if actor, ok := sourceActorFromContext(ctx); ok {
 		// The proof is useful only for the exact account and source conversation
 		// it was minted for. Do not downgrade a mismatched explicit request into
@@ -275,15 +265,6 @@ func (p *receivedSharePolicy) setReadOnlyResolutionSnapshot(raw json.RawMessage,
 	)
 }
 
-func receivedSourceFingerprint(m linuxnative.Message, tool string) string {
-	if tool != "media.observe" && tool != "media.transcribe" && tool != "media.listen" {
-		return shareNativeFingerprint(m)
-	}
-	b, _ := json.Marshal([]any{shareNativeFingerprint(m), m.Attachments})
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
 func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap pluginhost.Capability) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -364,7 +345,7 @@ func (p *receivedSharePolicy) Check(ctx context.Context, j pluginhost.Job, cap p
 	if current.AccountID == "" {
 		current.AccountID = p.manager.native.Account()
 	}
-	if receivedSourceFingerprint(current, p.tool) != p.fingerprint {
+	if wechatapp.ReceivedSourceFingerprint(current, p.tool) != p.fingerprint {
 		return errors.New("share_native_source_changed")
 	}
 	return nil
@@ -386,7 +367,10 @@ func (p *receivedSharePolicy) Service(ctx context.Context, j pluginhost.Job, cap
 		}
 	}()
 	if method == "wechat/channels_bridge" {
-		return p.channelsBridge(ctx, j, cap, raw)
+		if p.binding == nil || p.message.AppMessageType == nil || *p.message.AppMessageType != 51 {
+			return nil, errors.New("share_bridge_unavailable")
+		}
+		return wechatapp.CallBoundChannelsBridge(ctx, p.store, p.binding, j, raw, func(ctx context.Context) error { return p.Check(ctx, j, cap) })
 	}
 	if method != "wechat/http_route" || p.binding == nil {
 		return nil, errors.New("share_host_service_unavailable")
@@ -437,79 +421,46 @@ func (m *Manager) resolveInstalledChannels(ctx context.Context, message linuxnat
 
 func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.ChannelsSource) (linuxnative.ChannelsSource, error) {
 	m, message := p.manager, p.message
-	var err error
-	// The route arguments are derived from the native card, never from an
-	// arbitrary caller-provided ChannelsSource. Re-read the exact message here
-	// because this adapter is also reachable by delayed/recovery paths.
-	if reader, ok := m.native.(interface {
-		ChannelsMedia(context.Context, string) (linuxnative.ChannelsSource, error)
-	}); ok {
-		current, sourceErr := reader.ChannelsMedia(ctx, message.ID)
-		if sourceErr != nil || current.AccountID != source.AccountID || current.ThreadID != source.ThreadID || current.MessageID != source.MessageID || current.ObjectID != source.ObjectID || current.ObjectNonceID != source.ObjectNonceID {
-			return source, errors.New("share_native_source_changed")
-		}
+	// Re-read the exact message before choosing any parser route, including
+	// when this request is a delayed or explicitly retried read.
+	reader, ok := m.native.(channelsReader)
+	if !ok {
+		return source, errors.New("channels_source_backend_missing")
 	}
-	// Recheck access before requesting a new native short link. The final
-	// immutable snapshot below has its own check after the read arguments exist.
-	preflight := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_channels", Context: p.invocation()}
-	if err = p.Check(ctx, preflight, pluginhost.Capability{}); err != nil {
+	if err := wechatapp.RecheckChannelsSource(ctx, message, m.native.Account(), reader, source); err != nil {
 		return source, err
 	}
-	args := map[string]any{}
-	link := ""
-	bridge, bridgeConfigured, bridgeErr := p.configuredChannelsBridge(ctx)
-	if bridgeErr != nil {
-		return source, bridgeErr
+	preflight := pluginhost.Job{Plugin: "share-reader", Tool: "share.resolve_channels", Context: p.invocation()}
+	if err := p.Check(ctx, preflight, pluginhost.Capability{}); err != nil {
+		return source, err
 	}
-	if bridgeConfigured && bridge != "" && source.ObjectID != "" && !strings.HasPrefix(source.ObjectID, "export/") {
-		args["object_id"] = source.ObjectID
-		// nonce_id is optional for an object bridge. Supplying an empty value is
-		// not equivalent to omitting it: the packaged parser deliberately rejects
-		// an explicit empty nonce so it cannot become an ambiguous selector.
-		if source.ObjectNonceID != "" {
-			args["nonce_id"] = source.ObjectNonceID
-		}
-		p.binding, err = newShareRouteBinding(message, source, p.source, "bridge")
-	} else if strings.HasPrefix(source.ObjectID, "export/") {
-		args["export_id"], args["nonce_id"] = source.ObjectID, source.ObjectNonceID
-	} else {
-		native, ok := m.native.(interface {
-			ChannelsShareURL(context.Context, string, string, string) (string, error)
-		})
-		if !ok || source.ObjectID == "" {
-			return source, errors.New("share_native_shortlink_required")
-		}
-		// The legacy binding is a scoped, pre-plugin native short link.  It is
-		// not a bridge endpoint and is only a fallback before requesting a new
-		// native link for this exact received message.
-		if legacy, found, legacyErr := legacyShareBindingURL(m.dir, source); legacyErr != nil {
-			return source, legacyErr
-		} else if found {
-			link = legacy
-		} else {
-			link, err = native.ChannelsShareURL(ctx, message.ID, message.ThreadID, source.ObjectID)
-			if err != nil {
-				return source, errors.New("share_native_shortlink_unavailable")
-			}
-		}
-		link, err = sharespec.ShareURL(link)
-		if err != nil {
-			return source, errors.New("share_native_shortlink_invalid")
-		}
-		args["url"], args["expected_object_id"] = link, source.ObjectID
-	}
-	if p.binding == nil {
-		p.binding, err = newShareRouteBinding(p.message, source, p.source, link)
-	}
+	_, bridgeConfigured, err := wechatapp.ConfiguredChannelsBridge(ctx, p.store)
 	if err != nil {
 		return source, err
 	}
-	if p.timeoutSeconds > 0 {
-		args["timeout_seconds"] = p.timeoutSeconds
+	raw, link, err := wechatapp.ChannelsResolutionArguments(ctx, source, bridgeConfigured, p.timeoutSeconds, func(ctx context.Context) (string, error) {
+		native, ok := m.native.(interface {
+			ChannelsShareURL(context.Context, string, string, string) (string, error)
+		})
+		if !ok {
+			return "", errors.New("share_native_shortlink_required")
+		}
+		// A legacy short link is only a fallback for this bound message.
+		if legacy, found, err := legacyShareBindingURL(m.dir, source); err != nil || found {
+			return legacy, err
+		}
+		link, err := native.ChannelsShareURL(ctx, message.ID, message.ThreadID, source.ObjectID)
+		if err != nil {
+			return "", errors.New("share_native_shortlink_unavailable")
+		}
+		return link, nil
+	})
+	if err != nil {
+		return source, err
 	}
-	raw, marshalErr := json.Marshal(args)
-	if marshalErr != nil {
-		return source, errors.New("share_route_arguments_invalid")
+	p.binding, err = wechatapp.NewBoundChannelsRoute(message, source, wechatapp.ChannelsEvent{Account: p.source.Account, Thread: p.source.Thread, Message: p.source.MessageID, EventID: p.source.EventID, Revision: p.source.Revision}, link)
+	if err != nil {
+		return source, err
 	}
 	h, ready, err := m.installedPluginRuntime()
 	if err != nil || !ready {
@@ -547,7 +498,7 @@ func (p *receivedSharePolicy) resolve(ctx context.Context, source linuxnative.Ch
 		return source, errors.New("share_plugin_handoff_unavailable")
 	}
 	var resolved linuxnative.ChannelsSource
-	if json.Unmarshal(private, &resolved) != nil || resolved.AccountID != p.message.AccountID || resolved.ThreadID != message.ThreadID || resolved.MessageID != message.ID || resolved.MediaURL == "" {
+	if json.Unmarshal(private, &resolved) != nil || !wechatapp.MatchesResolvedChannels(message, p.message.AccountID, source, resolved) {
 		return source, errors.New("share_plugin_handoff_invalid")
 	}
 	return resolved, nil

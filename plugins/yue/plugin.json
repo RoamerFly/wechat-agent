@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "yue",
+  "name": "YuE 作曲",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64"],
+  "runtime": {"transport": "http-adapter", "entrypoint": "runtime/managed-service.json"},
+  "permissions": ["artifact.read", "artifact.write", "gpu"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "e3d2ae7d620195e2391a5e9b3ac83acf2c6195371570726f1451001858da379d",
+    "CHANGELOG.md": "0222e7c64a936179963292c3ae3f569989da56f40a27127b26e89fb30fd11123",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "88b5928d2c7603b3ec28c64ab1c0b7a3711a94fcedac00af4f1fc0980c99a3ed",
+    "PERMISSIONS.md": "60b17a0ddc150f7736d93417ba6cb1668b58c63ad0a97358678ac1e9bf1a89a7",
+    "README.md": "825c3efc1a694c2228fe058b22b0356a233646eb7dc93cd61788d7380ff910e8",
+    "runtime/managed-service.json": "9e52cd1ecc8137ea9bb1cb558a93fdbce4d5933aae317cc0c72ee4617db5d344",
+    "ui.schema.json": "d56450bbd7c89f789ae772385950726ea7e015aee4f000410b92a1a516aae8a3"
+  }
+}

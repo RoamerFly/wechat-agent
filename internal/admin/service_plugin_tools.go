@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/strictjson"
 )
 
 func (p *permittedTools) servicePluginsAllowed() bool {
@@ -563,15 +563,7 @@ func (s servicePluginPolicy) deepSeekConfiguration(ctx context.Context, j plugin
 }
 
 func strictServicePluginJSON(raw json.RawMessage, target any) error {
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if err := d.Decode(target); err != nil {
-		return err
-	}
-	if err := d.Decode(new(any)); err != io.EOF {
-		return errors.New("trailing JSON data")
-	}
-	return nil
+	return strictjson.DecodeKnownFields(raw, target)
 }
 
 func publicSearchURL(raw string) (string, bool) {

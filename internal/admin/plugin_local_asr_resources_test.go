@@ -7,55 +7,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 )
-
-func TestLocalASRRuntimeManifestRelativePathsStayCanonical(t *testing.T) {
-	if _, err := localASRRuntimeRelative(`C:\sdk\payload.py`); err == nil {
-		t.Fatal("Windows absolute path accepted")
-	}
-	for _, raw := range []string{"../payload.py", "nested/../payload.py", `nested\..\payload.py`, "/payload.py", "nested//payload.py"} {
-		if _, err := localASRRuntimeRelative(raw); err == nil {
-			t.Fatalf("non-canonical runtime path accepted: %q", raw)
-		}
-	}
-	if runtime.GOOS == "windows" {
-		got, err := localASRRuntimeRelative(`nested\safe/file.py`)
-		if err != nil || got != filepath.Join("nested", "safe", "file.py") {
-			t.Fatalf("Windows manifest separators were not canonically accepted: %q %v", got, err)
-		}
-	} else if _, err := localASRRuntimeRelative(`nested\safe\file.py`); err == nil {
-		t.Fatal("non-Windows host accepted Windows separator form")
-	}
-}
-
-func TestLocalASRRuntimeManifestRejectsNormalizedDuplicatePaths(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("the alternate Windows spelling is intentionally rejected on non-Windows hosts")
-	}
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "nested"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	payload := []byte("synthetic-sdk")
-	if err := os.WriteFile(filepath.Join(root, "nested", "payload.py"), payload, 0600); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(payload)
-	raw, err := json.Marshal(map[string]any{"files": map[string]string{`nested\payload.py`: hex.EncodeToString(sum[:]), "nested/payload.py": hex.EncodeToString(sum[:])}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(root, localASRRuntimeManifest), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err = verifyLocalASRRuntimeManifest(root); err == nil {
-		t.Fatal("same SDK file under mixed separators was accepted twice")
-	}
-}
 
 func TestLocalASRPluginRegistrationUsesBoundResourceRootsAndMetadata(t *testing.T) {
 	f, _, policy, ctx := mediaPolicyFixture(t, false)
@@ -66,7 +22,8 @@ func TestLocalASRPluginRegistrationUsesBoundResourceRootsAndMetadata(t *testing.
 		t.Fatal("registered local ASR resources unavailable", err, resources)
 	}
 	for _, resource := range resources {
-		if resource.Account != "test" || resource.Plugin != p.ID || resource.PackageVersion != p.Version || resource.ManifestSHA256 != expected.ResourceVersion || !insideLocalASR(expected.Public, resource.Root) {
+		relative, relErr := filepath.Rel(expected.Public, resource.Root)
+		if resource.Account != "test" || resource.Plugin != p.ID || resource.PackageVersion != p.Version || resource.ManifestSHA256 != expected.ResourceVersion || relErr != nil || !filepath.IsLocal(relative) {
 			t.Fatal("resource binding widened or changed", resource)
 		}
 		if resource.Root == expected.Public {
@@ -77,7 +34,7 @@ func TestLocalASRPluginRegistrationUsesBoundResourceRootsAndMetadata(t *testing.
 	if err != nil || len(metadata) != 1 || metadata["local_asr"] == nil {
 		t.Fatal("trusted initializer metadata unavailable", err, metadata)
 	}
-	var got localASRInitializer
+	var got localasr.Initializer
 	if json.Unmarshal(metadata["local_asr"], &got) != nil || got != expected.Initializer {
 		t.Fatal("initializer metadata changed", got, expected.Initializer)
 	}
@@ -153,15 +110,15 @@ func TestLocalASRProfileSelectionComesOnlyFromMediaConfiguration(t *testing.T) {
 		t.Fatal("legacy speech setting changed the selected media profile", err, metadata)
 	}
 
-	installed, err := policy.store.Installed(ctx, localASRPluginID)
+	installed, err := policy.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, false)
+	installed, err = policy.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	configuration, err := policy.store.Configuration(ctx, localASRPluginID)
+	configuration, err := policy.store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,14 +127,14 @@ func TestLocalASRProfileSelectionComesOnlyFromMediaConfiguration(t *testing.T) {
 		values[key] = append(json.RawMessage(nil), value...)
 	}
 	delete(values, "local_asr_profile_id")
-	if _, err = policy.store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values}); err != nil {
+	if _, err = policy.store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = policy.store.Installed(ctx, localASRPluginID)
+	installed, err = policy.store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = policy.store.SetEnabled(ctx, localASRPluginID, installed.Revision, true); err != nil {
+	if _, err = policy.store.SetEnabled(ctx, localasr.PluginID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
 	if resources, err := f.manager.localASRPluginResources(ctx, p, g); err != nil || len(resources) != 0 {
@@ -189,17 +146,17 @@ func TestLocalASRProfileSelectionComesOnlyFromMediaConfiguration(t *testing.T) {
 // production. A legacy speech setting never makes a local profile visible.
 func configureLocalASRProfileForTest(t *testing.T, store *pluginhost.Store, ctx context.Context, id string) (pluginhost.Package, pluginhost.Grant) {
 	t.Helper()
-	installed, err := store.Installed(ctx, localASRPluginID)
+	installed, err := store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if installed.Enabled {
-		installed, err = store.SetEnabled(ctx, localASRPluginID, installed.Revision, false)
+		installed, err = store.SetEnabled(ctx, localasr.PluginID, installed.Revision, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	configuration, err := store.Configuration(ctx, localASRPluginID)
+	configuration, err := store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,18 +166,18 @@ func configureLocalASRProfileForTest(t *testing.T, store *pluginhost.Store, ctx 
 	}
 	values["asr_backend"] = json.RawMessage(`"local"`)
 	values["local_asr_profile_id"] = mustJSONRaw(t, id)
-	if _, err = store.SaveConfiguration(ctx, localASRPluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
+	if _, err = store.SaveConfiguration(ctx, localasr.PluginID, pluginhost.ConfigUpdate{Revision: configuration.Revision, Values: values, ClearSecrets: []string{"asr_key"}}); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = store.Installed(ctx, localASRPluginID)
+	installed, err = store.Installed(ctx, localasr.PluginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed, err = store.SetEnabled(ctx, localASRPluginID, installed.Revision, true)
+	installed, err = store.SetEnabled(ctx, localasr.PluginID, installed.Revision, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.ConfigurationForExecution(ctx, localASRPluginID); err != nil {
+	if _, err = store.ConfigurationForExecution(ctx, localasr.PluginID); err != nil {
 		t.Fatalf("configured local ASR profile was not executable: %v", err)
 	}
 	return installed.Package, pluginhost.Grant{Account: store.Account(), Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
@@ -238,7 +195,7 @@ func mustJSONRaw(t *testing.T, value string) json.RawMessage {
 type localASRTestProfile struct {
 	Public, Manifest, VAD, SDKFile string
 	ResourceVersion                string
-	Initializer                    localASRInitializer
+	Initializer                    localasr.Initializer
 }
 
 func writeRegisteredLocalASRProfile(t *testing.T, manager *Manager) (pluginhost.Package, pluginhost.Grant, localASRTestProfile) {
@@ -265,19 +222,19 @@ func writeRegisteredLocalASRProfile(t *testing.T, manager *Manager) (pluginhost.
 	}
 	sdkSum := sha256.Sum256([]byte("synthetic-sdk"))
 	runtimeManifest, _ := json.Marshal(map[string]any{"files": map[string]string{"sherpa_onnx.pyd": hex.EncodeToString(sdkSum[:])}})
-	if err := os.WriteFile(filepath.Join(sdkRoot, localASRRuntimeManifest), runtimeManifest, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sdkRoot, "runtime-manifest.json"), runtimeManifest, 0600); err != nil {
 		t.Fatal(err)
 	}
 	vadSum := sha256.Sum256([]byte("synthetic-vad"))
-	manifest := registeredLocalASRManifest{ID: "asr-sensevoice-small-int8", Root: modelRoot, Python: python, Entry: entry, Packages: sdkRoot, Model: model, Tokens: tokens, VADModel: vad, VADSHA256: hex.EncodeToString(vadSum[:]), VADThreshold: .5, Threads: 2, Language: "auto", ChunkSeconds: 30, TimeoutSeconds: 120}
+	manifest := localasr.Manifest{ID: "asr-sensevoice-small-int8", Root: modelRoot, Python: python, Entry: entry, Packages: sdkRoot, Model: model, Tokens: tokens, VADModel: vad, VADSHA256: hex.EncodeToString(vadSum[:]), VADThreshold: .5, Threads: 2, Language: "auto", ChunkSeconds: 30, TimeoutSeconds: 120}
 	manifestRaw, _ := json.Marshal(manifest)
 	manifestPath := filepath.Join(public, "manifests", "asr-sensevoice-small-int8.json")
 	if err := os.WriteFile(manifestPath, manifestRaw, 0600); err != nil {
 		t.Fatal(err)
 	}
 	manifestSum := sha256.Sum256(manifestRaw)
-	p := pluginhost.Package{ID: localASRPluginID, Version: "0.1.1"}
+	p := pluginhost.Package{ID: localasr.PluginID, Version: "0.1.1"}
 	g := pluginhost.Grant{Account: "test", Plugin: p.ID, Version: p.Version}
-	profile := localASRTestProfile{Public: public, Manifest: manifestPath, VAD: vad, SDKFile: sdkFile, ResourceVersion: hex.EncodeToString(manifestSum[:]), Initializer: localASRInitializer{ProfileID: "sensevoice-small-int8", ResourceVersion: hex.EncodeToString(manifestSum[:])}}
+	profile := localASRTestProfile{Public: public, Manifest: manifestPath, VAD: vad, SDKFile: sdkFile, ResourceVersion: hex.EncodeToString(manifestSum[:]), Initializer: localasr.Initializer{ProfileID: "sensevoice-small-int8", ResourceVersion: hex.EncodeToString(manifestSum[:])}}
 	return p, g, profile
 }

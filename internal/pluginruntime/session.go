@@ -150,7 +150,7 @@ func (s *session) Call(ctx context.Context, c pluginhost.Invocation, tool string
 }
 
 func safeCallMetadataKey(key string) bool {
-	if key == "wechat/document" {
+	if key == "wechat/document" || key == "station/audio" {
 		return true
 	}
 	// Future host-owned metadata stays namespaced. Plugin code and arguments do

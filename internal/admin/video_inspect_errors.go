@@ -5,17 +5,9 @@ import (
 	"errors"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaobserve"
 	"wechat-bot/internal/mediaspec"
 )
-
-type videoInspectionFailure struct {
-	code, message string
-	cause         error
-}
-
-func (e *videoInspectionFailure) Error() string                     { return e.code }
-func (e *videoInspectionFailure) Unwrap() error                     { return e.cause }
-func (e *videoInspectionFailure) SafeToolFailure() (string, string) { return e.code, e.message }
 
 func videoAudioTranscriptionError(err error) error {
 	if mediaspec.IsNoSpeech(err) {
@@ -34,7 +26,7 @@ func videoAudioTranscriptionError(err error) error {
 			code, message = "video_inspection_interrupted", "音轨已提取，但识别等待超时或已取消；保留当前时间范围以便续读"
 		}
 	}
-	return &videoInspectionFailure{code, message, err}
+	return mediaobserve.NewFailure(code, message, err)
 }
 func videoInspectionError(err error) error {
 	if err == nil {
@@ -66,14 +58,14 @@ func videoInspectionError(err error) error {
 			"video_audio_time_budget_exhausted":       "剩余执行时间不足以转写；保存检查点后从当前音轨起点继续",
 		}
 		if err.Error() == "vision image size limit" {
-			return &videoInspectionFailure{"vision_payload_too_large", "本批图像字节超过视觉传输预算；可减小batch_size或max_dimension后从未读帧继续，页大小不必缩短", err}
+			return mediaobserve.NewFailure("vision_payload_too_large", "本批图像字节超过视觉传输预算；可减小batch_size或max_dimension后从未读帧继续，页大小不必缩短", err)
 		}
 		if err.Error() == "video_audio_limit" {
-			return &videoInspectionFailure{"audio_payload_too_large", "本段PCM超过音轨传输预算；减小audio_chunk_seconds后继续，所需总时间范围不受此默认值限制", err}
+			return mediaobserve.NewFailure("audio_payload_too_large", "本段PCM超过音轨传输预算；减小audio_chunk_seconds后继续，所需总时间范围不受此默认值限制", err)
 		}
 		if text, ok := messages[err.Error()]; ok {
 			code, message = err.Error(), text
 		}
 	}
-	return &videoInspectionFailure{code, message, err}
+	return mediaobserve.NewFailure(code, message, err)
 }

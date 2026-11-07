@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "audio-workshop",
+  "name": "音频工坊",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64"],
+  "runtime": {"transport": "mcp-stdio", "entrypoint": "runtime/main.py"},
+  "permissions": ["artifact.read", "artifact.write"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "be692e4cf431b3bd9e4ef2a4994d8f15cd26f1d53ef059322a5b0d30ddcf36be",
+    "CHANGELOG.md": "fe4f3f289695f85988c95b5f57c1cdf574348e259ab06d9682e5d337a2601507",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "a8e1d909a48922d92cc0b38c5ce4f136b089b5a7cc3df96b7b1d1dbec420d39e",
+    "PERMISSIONS.md": "a7d49d94968f7ddac1624f3d8c0cefc985b622d2bf8404049a2235f0749e97fe",
+    "README.md": "eeb5f697780934ec7a48fa1192787fbd16680982df921f73ebf9490f87e7defb",
+    "runtime/audio_logic.py": "0e05b7a90ac894164d8feabbdadd851c0d06890099948e22090b91810dd3af95",
+    "runtime/main.py": "f8eed002403c6f4d43130f9b755f6655c82d8e6cc637788b799cf8962b45c038",
+    "runtime/README.md": "89458e68e9b8053f156acb68db6c6c6d05684306a4db4ec6137a7c25f5d70892",
+    "tests/test_audio_workshop.py": "81906eb44a6a4f049240f537d0f2073bb95dd3c31f8ac0dd0b94399405aa6705",
+    "ui.schema.json": "638d85055ee8b219c059d6a0a351ff5f6a2cd793901c87505caf1eb89fc9ac66"
+  }
+}

@@ -88,3 +88,48 @@ func TestConversationPreferencesVersionScopeAndInvalidation(t *testing.T) {
 		t.Fatal("clear preference failed")
 	}
 }
+
+func TestHostedGroupNoteAndSharePolicyReachModelWithinOneTurn(t *testing.T) {
+	s, c, in := memoryFixture(t)
+	c.Enabled = true
+	c.QuietStart, c.QuietEnd = "00:00", "00:00"
+	c.Permissions.ObserveGroups = true
+	in.Mode = "direct"
+	in.IsGroup = true
+	in.GroupShareSummary = true
+	in.Text = "synthetic share"
+	in = syntheticNativeInput(in, "host-preference-fixture")
+	model := &fakeModel{answer: `{"action":"silent","messages":[]}`}
+	const note = "Keep group summaries concise."
+	e := &Engine{Config: c, Store: s, model: model, ConversationPreference: func(got Input) (string, bool) {
+		return note, got.Channel == in.Channel && got.Account == in.Account && got.Thread == in.Thread
+	}}
+	if _, err := e.Respond(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if model.calls != 1 || !strings.Contains(model.system, "这是主人为当前群启用的分享总结") {
+		t.Fatalf("hosted share guidance absent or extra calls: %d", model.calls)
+	}
+	found := false
+	for _, turn := range model.turns {
+		var payload map[string]any
+		if json.Unmarshal([]byte(turn["content"]), &payload) != nil || payload["kind"] != "current_message" {
+			continue
+		}
+		found = payload["conversation_preferences"] == note && payload["group_share_summary"] == true
+		if payload["directed"] == true || payload["must_reply"] == true {
+			t.Fatal("automatic summary fabricated a mention or forced reply")
+		}
+	}
+	if !found {
+		t.Fatal("hosted note or share marker missing from current message")
+	}
+	if text, _ := s.Preferences(ScopeID(in.Channel, in.Account, in.Thread)); text != "" {
+		t.Fatal("host policy was written to memory")
+	}
+	other := in
+	other.Account = "other-account"
+	if got := e.conversationScope(other, c, time.Now()).Preferences; got != "" {
+		t.Fatalf("host note leaked across accounts: %q", got)
+	}
+}

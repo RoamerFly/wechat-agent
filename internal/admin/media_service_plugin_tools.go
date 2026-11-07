@@ -202,7 +202,7 @@ func (p *permittedTools) callMediaServicePlugin(ctx context.Context, capability,
 		if err != nil {
 			return nil, err
 		}
-		text, err := policy.observe(ctx)
+		text, err := policy.Observe(ctx)
 		if err != nil {
 			return nil, err
 		}

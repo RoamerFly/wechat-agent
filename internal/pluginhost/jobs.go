@@ -8,16 +8,42 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
 var ErrRevision = errors.New("record revision changed")
 var ErrRequestConflict = errors.New("request key already bound to another invocation")
+var applicationJobID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+
+const applicationJobPrefix = "application/"
 
 // CreateJob binds an idempotency key to the complete immutable request, including
 // source versions, plugin bytes and configuration revision. It never submits work.
 func (s *Store) CreateJob(ctx context.Context, input Job) (Job, bool, error) {
+	if strings.HasPrefix(input.Plugin, applicationJobPrefix) {
+		return Job{}, false, errors.New("application jobs require the trusted application host")
+	}
+	return s.createJob(ctx, input, false)
+}
+
+// CreateApplicationJob creates a durable action on behalf of a registered
+// application. The caller is the trusted station host: unlike a project-tool
+// job, it is not backed by an installed plugin record. The application ID is
+// still part of the idempotency identity and its adapter/authorization version
+// fields are immutable after the first invocation.
+func (s *Store) CreateApplicationJob(ctx context.Context, appID string, input Job) (Job, bool, error) {
+	if !applicationJobID.MatchString(appID) || input.Plugin != "" && input.Plugin != applicationJobPrefix+appID ||
+		strings.TrimSpace(input.Version) == "" || strings.TrimSpace(input.PackageDigest) == "" || strings.TrimSpace(input.ConfigRevision) == "" {
+		return Job{}, false, errors.New("invalid application job invocation")
+	}
+	input.Plugin = applicationJobPrefix + appID
+	return s.createJob(ctx, input, true)
+}
+
+func (s *Store) createJob(ctx context.Context, input Job, application bool) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var empty Job
@@ -52,26 +78,28 @@ func (s *Store) CreateJob(ctx context.Context, input Job) (Job, bool, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return empty, false, err
 	}
-	var digest string
-	var enabled, removed int
-	var manifest []byte
-	if err = s.db.QueryRowContext(ctx, `SELECT digest,enabled,removed,manifest FROM installed WHERE id=?`, input.Plugin).Scan(&digest, &enabled, &removed, &manifest); err != nil {
-		return empty, false, err
-	}
-	var p Package
-	if json.Unmarshal(manifest, &p) != nil {
-		return empty, false, errors.New("invalid plugin registration")
-	}
-	if enabled == 0 || removed != 0 || digest != input.PackageDigest || p.Version != input.Version {
-		return empty, false, errors.New("plugin disabled or version changed")
-	}
-	var configRevision int
-	err = s.db.QueryRowContext(ctx, `SELECT revision FROM configurations WHERE plugin=?`, input.Plugin).Scan(&configRevision)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return empty, false, err
-	}
-	if input.ConfigRevision != strconv.Itoa(configRevision) {
-		return empty, false, errors.New("plugin configuration changed")
+	if !application {
+		var digest string
+		var enabled, removed int
+		var manifest []byte
+		if err = s.db.QueryRowContext(ctx, `SELECT digest,enabled,removed,manifest FROM installed WHERE id=?`, input.Plugin).Scan(&digest, &enabled, &removed, &manifest); err != nil {
+			return empty, false, err
+		}
+		var p Package
+		if json.Unmarshal(manifest, &p) != nil {
+			return empty, false, errors.New("invalid plugin registration")
+		}
+		if enabled == 0 || removed != 0 || digest != input.PackageDigest || p.Version != input.Version {
+			return empty, false, errors.New("plugin disabled or version changed")
+		}
+		var configRevision int
+		err = s.db.QueryRowContext(ctx, `SELECT revision FROM configurations WHERE plugin=?`, input.Plugin).Scan(&configRevision)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return empty, false, err
+		}
+		if input.ConfigRevision != strconv.Itoa(configRevision) {
+			return empty, false, errors.New("plugin configuration changed")
+		}
 	}
 	idSum := sha256.Sum256([]byte(s.account + "\x00" + input.Plugin + "\x00" + c.Thread + "\x00" + c.RequestKey))
 	request.ID = hex.EncodeToString(idSum[:])
@@ -95,6 +123,21 @@ func (s *Store) Job(ctx context.Context, id string) (Job, error) {
 	}
 	return job, nil
 }
+
+// JobByRequest reads the already persisted invocation without creating or
+// claiming a job. The caller still checks the requester's source and grant.
+func (s *Store) JobByRequest(ctx context.Context, plugin, thread, key string) (Job, error) {
+	var raw []byte
+	var job Job
+	if err := s.db.QueryRowContext(ctx, `SELECT record FROM jobs WHERE plugin=? AND thread=? AND request_key=?`, plugin, thread, key).Scan(&raw); err != nil {
+		return job, err
+	}
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return Job{}, err
+	}
+	return job, nil
+}
+
 func (s *Store) mutateJob(ctx context.Context, id string, revision int, change func(*Job) error) (Job, error) {
 	return s.mutateJobPrivate(ctx, id, revision, nil, change)
 }
@@ -153,11 +196,21 @@ func (s *Store) mutateJobPrivate(ctx context.Context, id string, revision int, p
 	return job, tx.Commit()
 }
 func (s *Store) ClaimJob(ctx context.Context, id string, revision int) (Job, error) {
+	return s.ClaimJobWithSubmission(ctx, id, revision, nil)
+}
+
+// ClaimJobWithSubmission commits host-verified effective parameters before
+// any backend submission. The request fingerprint remains the original intent.
+func (s *Store) ClaimJobWithSubmission(ctx context.Context, id string, revision int, submission json.RawMessage) (Job, error) {
+	if len(submission) > 1<<20 || len(submission) != 0 && !json.Valid(submission) {
+		return Job{}, errors.New("invalid submission checkpoint")
+	}
 	return s.mutateJob(ctx, id, revision, func(j *Job) error {
 		if j.State != "pending" || j.CancelRequested {
 			return errors.New("job already claimed or cancelled")
 		}
 		j.State = "submitting"
+		j.Submission = append(json.RawMessage(nil), submission...)
 		return nil
 	})
 }
@@ -190,6 +243,29 @@ func (s *Store) RequestJobCancel(ctx context.Context, id string, revision int) (
 		if j.State == "pending" {
 			j.State = "cancelled"
 		}
+		return nil
+	})
+}
+
+// FailJobPreparation closes work that the host verified was never claimed for
+// submission. The revision check prevents replacing a concurrent claim.
+func (s *Store) FailJobPreparation(ctx context.Context, id string, revision int, stage JobFailureStage) (Job, error) {
+	code := "backend_preparation_failed"
+	switch stage {
+	case JobFailureDispatch:
+	case JobFailureAuthority:
+		code = "source_authorization_changed"
+	case JobFailureValidation:
+		code = "recipe_validation_failed"
+	default:
+		return Job{}, errors.New("invalid job preparation stage")
+	}
+	return s.mutateJob(ctx, id, revision, func(j *Job) error {
+		if j.State != "pending" {
+			return errors.New("job already claimed")
+		}
+		j.State = "failed"
+		j.Diagnostic = &JobDiagnostic{Stage: stage, Code: code}
 		return nil
 	})
 }
@@ -280,12 +356,34 @@ func (s *Store) checkpointResult(ctx context.Context, id string, revision int, s
 }
 
 func (s *Store) Jobs(ctx context.Context, plugin string, after int64, limit int) (JobPage, error) {
+	return s.jobs(ctx, plugin, "", after, limit)
+}
+
+// JobsForTool pages only durable records for a trusted host tool. The tool
+// predicate is evaluated by SQLite before LIMIT, so separate application
+// ledgers cannot create empty pages for one another.
+func (s *Store) JobsForTool(ctx context.Context, plugin, tool string, after int64, limit int) (JobPage, error) {
+	if strings.TrimSpace(tool) == "" {
+		return JobPage{Items: []Job{}, Next: after, Limit: limit}, errors.New("tool required")
+	}
+	return s.jobs(ctx, plugin, tool, after, limit)
+}
+
+func (s *Store) jobs(ctx context.Context, plugin, tool string, after int64, limit int) (JobPage, error) {
 	page := JobPage{Items: []Job{}, Next: after, Limit: limit}
 	if limit < 1 || after < 0 {
 		return page, errors.New("positive page size and nonnegative cursor required")
 	}
-	// Only the selected plugin's page is loaded; no in-memory full-table filtering.
-	rows, err := s.db.QueryContext(ctx, `SELECT seq,record FROM jobs WHERE plugin=? AND seq>? ORDER BY seq LIMIT ?`, plugin, after, limit)
+	query := `SELECT seq,record FROM jobs WHERE plugin=? AND seq>?`
+	args := []any{plugin, after}
+	if tool != "" {
+		query += ` AND json_extract(CAST(record AS TEXT),'$.tool')=?`
+		args = append(args, tool)
+	}
+	query += ` ORDER BY seq LIMIT ?`
+	args = append(args, limit)
+	// Only the selected plugin/tool page is loaded; no in-memory full-table filtering.
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return page, err
 	}
@@ -309,8 +407,15 @@ func (s *Store) Jobs(ctx context.Context, plugin string, after int64, limit int)
 	if err != nil {
 		return page, err
 	}
+	moreQuery := `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND seq>?`
+	moreArgs := []any{plugin, page.Next}
+	if tool != "" {
+		moreQuery += ` AND json_extract(CAST(record AS TEXT),'$.tool')=?`
+		moreArgs = append(moreArgs, tool)
+	}
+	moreQuery += `)`
 	var more int
-	err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE plugin=? AND seq>?)`, plugin, page.Next).Scan(&more)
+	err = s.db.QueryRowContext(ctx, moreQuery, moreArgs...).Scan(&more)
 	page.HasMore = more != 0
 	return page, err
 }

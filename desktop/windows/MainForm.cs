@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -25,6 +26,7 @@ namespace WechatAgent.Desktop {
         readonly LifecycleSurface lifecycle = new LifecycleSurface();
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         WebView2 web;
+        DouyinAuthorizationDialog douyinAuthorization;
         CancellationTokenSource operation;
         bool busy, allowExit, exitRequested, stoppingCommitted;
         FormWindowState restoredState = FormWindowState.Maximized;
@@ -49,8 +51,8 @@ namespace WechatAgent.Desktop {
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             // The management page owns the full client area. These controls are
             // visible only during startup, shutdown, or a recoverable failure.
-            placeholder.Dock = DockStyle.Fill; placeholder.BackColor = Color.FromArgb(248, 250, 252);
-            var center = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(36) };
+            placeholder.Dock = DockStyle.Fill; placeholder.BackColor = Color.FromArgb(239, 243, 255);
+            var center = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(0) };
             center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
             status.Text = "正在启动 Agent-home-station…"; status.Dock = DockStyle.Fill; status.TextAlign = ContentAlignment.BottomCenter; status.AutoSize = false;
             var buttons = new FlowLayoutPanel { AutoSize = true, Anchor = AnchorStyles.Top, WrapContents = false, Margin = new Padding(0, 24, 0, 0) };
@@ -76,7 +78,7 @@ namespace WechatAgent.Desktop {
                 closeMode.DropDownItems.Add(item);
             }
             closeMode.DropDownOpening += delegate { for (int i = 0; i < closeMode.DropDownItems.Count; i++) ((ToolStripMenuItem)closeMode.DropDownItems[i]).Checked = closeSettings.Behavior == new [] {"ask", "tray", "exit"}[i]; };
-            about.Click += delegate { MessageBox.Show("Agent-home-station 桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/Agent-home-station\n反馈：https://github.com/RoamerFly/Agent-home-station/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于 Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Information); };
+            about.Click += delegate { MessageBox.Show("Agent-home-station 桌面版 1.1.0\n开发者：RoamerFly\n项目：https://github.com/RoamerFly/Agent-home-station\n反馈：https://github.com/RoamerFly/Agent-home-station/issues\n\n最小化：保留任务栏窗口，继续运行\n关闭窗口：选择取消、托盘或退出，可记住选择\n选择退出：安全停止全部本实例服务并退出\n\n后端：" + (d.LocalStation ? "本机成长站（无需微信）" : d.Windows ? "Windows 原生（Linux 微信协议标识）" : "WSL") + "\n项目：" + d.Workspace + "\n服务数据：" + d.Root, "关于 Agent-home-station", MessageBoxButtons.OK, MessageBoxIcon.Information); };
             menu.Items.AddRange(new ToolStripItem[] {show, hide, new ToolStripSeparator(), startItem, stopItem, new ToolStripSeparator(), closeMode, about, exitItem});
             tray.Icon = Icon; tray.Text = "Agent-home-station · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
             tray.DoubleClick += delegate { RestoreWindow(); };
@@ -99,7 +101,7 @@ namespace WechatAgent.Desktop {
                         bool dark = false;
                         if (web != null && web.CoreWebView2 != null) {
                             try {
-                                var theme = web.ExecuteScriptAsync("document.documentElement.dataset.theme");
+                                var theme = web.ExecuteScriptAsync("document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')");
                                 if (await Task.WhenAny(theme, Task.Delay(150)) == theme) dark = await theme == "\"dark\"";
                             } catch (InvalidOperationException) { }
                         }
@@ -129,6 +131,7 @@ namespace WechatAgent.Desktop {
             WindowEvent("exit_requested");
             exitRequested = true;
             ++pageGeneration;
+            CloseDouyinAuthorization();
             if (busy) {
                 status.Text = "操作完成后将安全停止服务并退出…";
                 tray.Text = "Agent-home-station · 正在准备退出";
@@ -160,6 +163,7 @@ namespace WechatAgent.Desktop {
         }
         void ClosePage() {
             ++pageGeneration;
+            CloseDouyinAuthorization();
             var view = web; web = null;
             if (view != null) { Controls.Remove(view); view.Dispose(); }
             if (!IsDisposed && !Disposing) { placeholder.Visible = true; placeholder.BringToFront(); }
@@ -172,7 +176,7 @@ namespace WechatAgent.Desktop {
             if (busy || closeQueued || allowExit) return; SetBusy(true, false); operation = new CancellationTokenSource();
             try {
                 status.Text = "正在启动 Agent-home-station…"; tray.Text = "Agent-home-station · 正在启动";
-                lifecycle.State("正在启动",status.Text);
+                lifecycle.State("欢迎回家","正在准备大肥鱼的工作台…");
                 await controller.Start(operation.Token);
                 if (!exitRequested) await ShowPage();
                 tray.Text = "Agent-home-station · 运行中";
@@ -186,9 +190,9 @@ namespace WechatAgent.Desktop {
             bool cancelled = false;
             bool completedExit = false;
             try {
-                ++pageGeneration;placeholder.Visible=true;placeholder.BringToFront();
+                ++pageGeneration;CloseDouyinAuthorization();placeholder.Visible=true;placeholder.BringToFront();
                 status.Text = "正在等待在途任务结束，随后停止全部服务…"; tray.Text = "Agent-home-station · 正在安全停止";
-                lifecycle.State(exiting?"正在安全退出":"正在停止服务",status.Text);
+                lifecycle.State(exiting?"让大肥鱼休息一下":"正在收拾工作台",status.Text);
                 await controller.Stop(operation.Token);
                 ClosePage();lifecycle.State("已安全停止","登录、记忆与配置已保留。",false,true);
                 tray.Text = "Agent-home-station · 已停止";
@@ -225,6 +229,7 @@ namespace WechatAgent.Desktop {
                 // visible behind the startup panel until navigation finishes.
                 view.Visible = true; placeholder.BringToFront();
                 view.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                view.CoreWebView2.WebMessageReceived += delegate(object sender, CoreWebView2WebMessageReceivedEventArgs e) { HandleWebMessage(view, generation, e); };
                 view.CoreWebView2.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; if (!CurrentPage(view, generation)) return; if (Local(e.Uri)) view.CoreWebView2.Navigate(e.Uri); else if (e.IsUserInitiated && Http(e.Uri)) Process.Start(e.Uri); };
                 view.CoreWebView2.NavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs e) { if (!CurrentPage(view, generation)) { e.Cancel = true; return; } if (!Local(e.Uri) && e.Uri != "about:blank") { e.Cancel = true; if (e.IsUserInitiated && Http(e.Uri)) Process.Start(e.Uri); } };
                 // Use protected API session cookies; never inject credentials or a host object into JS.
@@ -243,8 +248,43 @@ namespace WechatAgent.Desktop {
                 view.CoreWebView2.Navigate(deployment.Url + "/");
             } catch { if (CurrentPage(view, generation)) { ClosePage(); throw; } }
         }
+        void HandleWebMessage(WebView2 view, int generation, CoreWebView2WebMessageReceivedEventArgs message) {
+            if (!CurrentPage(view, generation) || !deployment.LocalStation || !ManagementPage(message.Source)) return;
+            Dictionary<string, object> input;
+            try { input = Deployment.Json.Deserialize<Dictionary<string, object>>(message.WebMessageAsJson); }
+            catch (Exception) { return; }
+            if (input == null || Deployment.Text(input, "type") != "douyin-auth-open") return;
+            var authorizationURL = Deployment.Text(input, "url");
+            var expiresAt = Deployment.Text(input, "expires_at");
+            DouyinAuthorizationAttempt attempt;
+            if (!DouyinAuthorizationPolicy.TryCreate(authorizationURL, expiresAt, DateTimeOffset.UtcNow, out attempt)) {
+                PostDouyinAuthorization(view, generation, "douyin-auth-closed", DouyinAuthorizationPolicy.StateFromOfficialURL(authorizationURL), "", "授权信息无效或已过期，请重新生成二维码。");
+                return;
+            }
+            CloseDouyinAuthorization();
+            var dialog = new DouyinAuthorizationDialog(deployment, authorizationURL, attempt,
+                callback => PostDouyinAuthorization(view, generation, "douyin-auth-callback", attempt.State, callback, ""),
+                reason => PostDouyinAuthorization(view, generation, "douyin-auth-closed", attempt.State, "", reason));
+            douyinAuthorization = dialog;
+            dialog.FormClosed += delegate { if (douyinAuthorization == dialog) douyinAuthorization = null; };
+            dialog.Show(this);
+        }
+        void PostDouyinAuthorization(WebView2 view, int generation, string type, string state, string callback, string error) {
+            if (!CurrentPage(view, generation) || view.CoreWebView2 == null || !ManagementPage(view.Source == null ? "" : view.Source.ToString())) return;
+            try { view.CoreWebView2.PostWebMessageAsJson(Deployment.Json.Serialize(new { type = type, state = state, callback_url = callback, error = error })); }
+            catch (InvalidOperationException) { }
+        }
+        void CloseDouyinAuthorization() {
+            var dialog = douyinAuthorization; douyinAuthorization = null;
+            if (dialog != null && !dialog.IsDisposed) dialog.CancelForServiceStop();
+        }
         bool CurrentPage(WebView2 view, int generation) {
             return !IsDisposed && !Disposing && !exitRequested && !allowExit && generation == pageGeneration && web == view && !view.IsDisposed;
+        }
+        bool ManagementPage(string url) {
+            Uri value, expected;
+            return Uri.TryCreate(url, UriKind.Absolute, out value) && Uri.TryCreate(deployment.Url, UriKind.Absolute, out expected) &&
+                value.Scheme == expected.Scheme && value.Host == expected.Host && value.Port == expected.Port && value.UserInfo == "" && value.AbsolutePath == "/" && value.Query == "" && value.Fragment == "";
         }
         protected override void WndProc(ref Message message) {
             base.WndProc(ref message);
@@ -259,7 +299,7 @@ namespace WechatAgent.Desktop {
         static bool Http(string url) { Uri uri; return Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "http" || uri.Scheme == "https"); }
         void Error(Exception error) { if (IsDisposed || Disposing || allowExit) return; ClosePage(); status.Text = error.Message;lifecycle.State("操作未完成",error.Message,false); retry.Visible = true; tray.Text = "Agent-home-station · 需要处理"; RestoreWindow(); }
         protected override void Dispose(bool disposing) {
-            if (disposing) { ++pageGeneration; allowExit = true; timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
+            if (disposing) { ++pageGeneration; allowExit = true; CloseDouyinAuthorization(); timer.Dispose(); tray.Visible = false; tray.Dispose(); menu.Dispose(); if (web != null) { web.Dispose(); web = null; } controller.Dispose(); }
             base.Dispose(disposing);
         }
     }

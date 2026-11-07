@@ -145,6 +145,9 @@ func (s *Sender) SendText(ctx context.Context, request sending.TextRequest) (sen
 	post.GetBody = nil                 // Do not give Transport a replayable POST body.
 	response, err := s.client.Do(post) // Never retry a write: it may have succeeded.
 	if err != nil {
+		if errors.Is(err, ErrWriteNotAdmitted) {
+			return sending.Receipt{}, ErrWriteNotAdmitted
+		}
 		return sending.Receipt{}, sending.ErrOutcomeUnknown
 	}
 	defer response.Body.Close()

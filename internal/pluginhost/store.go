@@ -71,7 +71,16 @@ func OpenStore(dir, account string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS migrations(id TEXT PRIMARY KEY,plugin TEXT NOT NULL,digest TEXT NOT NULL,source_hash TEXT NOT NULL,config_revision INTEGER NOT NULL,permissions_hash TEXT NOT NULL DEFAULT '',config_hash TEXT NOT NULL DEFAULT '',installed_revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS jobs(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,plugin TEXT NOT NULL,thread TEXT NOT NULL,request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,record BLOB NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,UNIQUE(plugin,thread,request_key))`,
 		`CREATE INDEX IF NOT EXISTS jobs_plugin_sequence ON jobs(plugin,seq)`,
+		// Application hosts may keep several durable tool ledgers under one
+		// application plugin. Filter inside SQLite so a publication page is not
+		// consumed by unrelated interaction records before LIMIT is applied.
+		`CREATE INDEX IF NOT EXISTS jobs_plugin_tool_sequence ON jobs(plugin,json_extract(CAST(record AS TEXT),'$.tool'),seq)`,
 		`CREATE TABLE IF NOT EXISTS job_private_results(job_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,payload BLOB NOT NULL)`,
+		// A live session is a durable host coordination record. This Store is
+		// account-scoped, so the partial unique index below gives each fish one
+		// active session even when more than one controller has opened the DB.
+		`CREATE TABLE IF NOT EXISTS live_sessions(id TEXT PRIMARY KEY,request_key TEXT NOT NULL UNIQUE,fingerprint TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision >= 1),active INTEGER NOT NULL CHECK(active IN (0,1)),payload BLOB NOT NULL)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS live_sessions_one_active ON live_sessions(active) WHERE active=1`,
 		// Host state is intentionally separate from plugin configuration and
 		// runtime data. It remains private to this account's host Store even if a
 		// package is disabled, removed, or never installed.

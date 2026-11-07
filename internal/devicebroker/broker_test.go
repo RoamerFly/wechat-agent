@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 	"wechat-bot/internal/adbserver"
+	"wechat-bot/internal/devicespec"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 )
@@ -182,7 +183,12 @@ func fixtureOptions(t *testing.T) (Options, fixturePaths) {
 		t.Fatal(err)
 	}
 	fixturePackage(t, paths.packageDir)
-	return Options{Python: paths.python, PackageDirectory: paths.packageDir, WorkspaceDirectory: paths.workspace, StateDirectory: paths.state, GlobalLeaseDirectory: paths.leaseDir, ADBRoots: []string{paths.adbRoot}, Account: "account_1", Devices: []string{"allowed"}, Actions: []string{"tap", "capture"}, ADBServer: fakeADBServer{}}, paths
+	return Options{
+		IOOptions: devicespec.IOOptions{Python: paths.python, PackageDirectory: paths.packageDir, WorkspaceDirectory: paths.workspace,
+			StateDirectory: paths.state, GlobalLeaseDirectory: paths.leaseDir, ADBRoots: []string{paths.adbRoot},
+			Account: "account_1", Devices: []string{"allowed"}, Actions: []string{"tap", "capture"}},
+		ADBServer: fakeADBServer{},
+	}, paths
 }
 
 type fakeADBServer struct{}

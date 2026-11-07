@@ -13,6 +13,7 @@ import (
 
 	_ "modernc.org/sqlite"
 	"wechat-bot/internal/adbserver"
+	"wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -31,34 +32,6 @@ func (e *ioCleanupError) Error() string { return "device_io_cleanup_unconfirmed"
 func (e *ioCleanupError) Unwrap() error { return e.err }
 func (e *ioCleanupError) Close() error  { return e.cleanup() }
 
-type ioAuthorityKey struct{}
-
-// WithIOAuthority binds the adapter's host-only actor/job check to every I/O step.
-func WithIOAuthority(ctx context.Context, check func(context.Context) error) context.Context {
-	return context.WithValue(ctx, ioAuthorityKey{}, check)
-}
-
-type IOBroker interface {
-	Binding() (string, error)
-	Begin(context.Context, string, json.RawMessage) (IOCall, error)
-	Close() error
-}
-type IOCall interface {
-	Service(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
-	Complete(context.Context, json.RawMessage) (json.RawMessage, error)
-	Close() error
-}
-
-// IOGrant is the deliberately narrow, display-safe portion of a registered
-// device profile.  It never exposes a serial, host path, ADB endpoint or any
-// credential.  The host uses it to explain the existing effective scope; it
-// is not a second authorization system.
-type IOGrant struct {
-	DeviceID string   `json:"device_id"`
-	Packages []string `json:"packages"`
-	Actions  []string `json:"actions"`
-}
-
 // InspectIOOptions reads the same profile/path/ADB allowlists as OpenIO. It
 // creates no directories, starts no child and never acquires the ADB server.
 func InspectIOOptions(ctx context.Context, o Options) error {
@@ -73,7 +46,7 @@ func InspectIOOptions(ctx context.Context, o Options) error {
 // InspectIOGrant reads the already registered profile and returns only its
 // public app/action allowlist.  Like InspectIOOptions it does not create
 // directories, launch a child process, acquire ADB, or contact a device.
-func InspectIOGrant(ctx context.Context, o Options) ([]IOGrant, error) {
+func InspectIOGrant(ctx context.Context, o Options) ([]devicespec.IOGrant, error) {
 	o.inspectOnly = true
 	if _, err := pluginhost.Verify(o.PackageDirectory); err != nil {
 		return nil, ErrNeedsMigration
@@ -82,9 +55,9 @@ func InspectIOGrant(ctx context.Context, o Options) ([]IOGrant, error) {
 	if err != nil {
 		return nil, err
 	}
-	grants := make([]IOGrant, 0, len(r.profile.Devices))
+	grants := make([]devicespec.IOGrant, 0, len(r.profile.Devices))
 	for id, device := range r.profile.Devices {
-		grants = append(grants, IOGrant{
+		grants = append(grants, devicespec.IOGrant{
 			DeviceID: id,
 			Packages: append([]string(nil), device.Packages...),
 			Actions:  append([]string(nil), device.Actions...),
@@ -111,7 +84,7 @@ type ioBroker struct {
 	resourcesClosed       bool
 }
 
-func OpenIO(ctx context.Context, o Options) (IOBroker, error) {
+func OpenIO(ctx context.Context, o Options) (devicespec.IOBroker, error) {
 	if err := InspectIOOptions(ctx, o); err != nil {
 		return nil, err
 	}
@@ -119,7 +92,7 @@ func OpenIO(ctx context.Context, o Options) (IOBroker, error) {
 	if err != nil {
 		return nil, err
 	}
-	fail := func(err error) (IOBroker, error) { _ = r.adbLease.Close(); return nil, err }
+	fail := func(err error) (devicespec.IOBroker, error) { _ = r.adbLease.Close(); return nil, err }
 	blobs, err := ensurePrivateDirectory(filepath.Join(r.storage, "io-blobs"))
 	if err != nil || !within(r.storage, blobs) {
 		return fail(ErrNeedsMigration)
@@ -159,11 +132,9 @@ func (b *ioBroker) Binding() (string, error) {
 	}
 	return b.binding, nil
 }
-func (b *ioBroker) Begin(ctx context.Context, name string, raw json.RawMessage) (IOCall, error) {
-	if check, ok := ctx.Value(ioAuthorityKey{}).(func(context.Context) error); ok {
-		if err := check(ctx); err != nil {
-			return nil, err
-		}
+func (b *ioBroker) Begin(ctx context.Context, name string, raw json.RawMessage) (devicespec.IOCall, error) {
+	if err := devicespec.CheckIOAuthority(ctx); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -255,10 +226,8 @@ type ioCall struct {
 }
 
 func (c *ioCall) check(ctx context.Context) error {
-	if check, ok := ctx.Value(ioAuthorityKey{}).(func(context.Context) error); ok {
-		if err := check(ctx); err != nil {
-			return err
-		}
+	if err := devicespec.CheckIOAuthority(ctx); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err

@@ -11,7 +11,7 @@ import (
 	"wechat-bot/internal/mcptools"
 )
 
-type memoryRecordUnavailable struct{}
+type memoryRecordUnavailable struct{ companion.RecordUnavailable }
 
 func storedMediaTranscript(media companion.IncomingMediaRef) (string, bool) {
 	switch media.ObservationState {
@@ -34,9 +34,9 @@ func storedMediaTranscript(media companion.IncomingMediaRef) (string, bool) {
 	return "", false
 }
 
-func (memoryRecordUnavailable) Error() string { return "memory_record_unavailable" }
-func (memoryRecordUnavailable) SafeToolFailure() (string, string) {
-	return "memory_record_unavailable", "当前授权范围内找不到这条记录，或记录已隔离、遗忘；请用memory_search返回的id读取。原生微信消息编号应使用wechat_read核对，不能据此断言聊天历史不存在"
+func (e memoryRecordUnavailable) SafeToolFailure() (string, string) {
+	code, message := e.RecordUnavailable.SafeToolFailure()
+	return code, message + "。原生微信消息编号应使用wechat_read核对，不能据此断言聊天历史不存在"
 }
 
 func (p *permittedTools) memoryTools() []mcptools.Tool {

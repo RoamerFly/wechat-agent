@@ -11,7 +11,6 @@ import (
 	"sort"
 	"time"
 
-	"wechat-bot/internal/devicebroker"
 	mobile "wechat-bot/internal/devicespec"
 )
 
@@ -150,8 +149,11 @@ func (s *mobileWorkflowService) Overview() mobileOverview {
 // mobileDeviceGrantSummary only parses the existing allowlisted device
 // profile. It never opens ADB or a broker, so rendering an overview cannot
 // wake the phone or acquire its lease.
-func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]devicebroker.IOGrant {
-	result := map[string]devicebroker.IOGrant{}
+func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]mobile.IOGrant {
+	result := map[string]mobile.IOGrant{}
+	if m.deviceIO == nil {
+		return result
+	}
 	store, err := m.packageStore()
 	if err != nil {
 		return result
@@ -168,7 +170,7 @@ func (m *Manager) mobileDeviceGrantSummary(settings mobile.Settings) map[string]
 	if err != nil {
 		return result
 	}
-	grants, err := devicebroker.InspectIOGrant(context.Background(), options)
+	grants, err := m.deviceIO.Grants(context.Background(), options)
 	if err != nil {
 		return result
 	}

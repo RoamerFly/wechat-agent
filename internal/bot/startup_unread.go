@@ -93,6 +93,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	}
 	var messages []linuxnative.Message
 	var directedSender string
+	sequences := map[string]int64{}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if live != nil && !live[item.Event.Data.MessageID] || live == nil && !item.Backlog || item.Event.Data.ThreadID != thread || item.ToolStarted || time.Now().Before(item.RetryAfter) {
@@ -112,7 +113,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			w.queuePhase(item.Event.Data.MessageID, "read_pending")
 			return w.persistErr
 		}
-		if m.AccountID != "" && m.AccountID != w.source.Account() || m.ThreadID != thread || m.ID != item.Event.Data.MessageID || m.Direction != item.Event.Data.Direction {
+		if m.AccountID != "" && m.AccountID != w.source.Account() || m.ThreadID != thread || m.ID != item.Event.Data.MessageID || m.Direction != item.Event.Data.Direction || !w.authorizedMessage(m) {
 			w.queuePhase(item.Event.Data.MessageID, "skipped")
 			continue
 		}
@@ -125,6 +126,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		w.recordIncoming(m)
 		messages = append(messages, m)
+		sequences[m.ID] = sourceSequence(item.Event)
 	}
 	if len(messages) == 0 {
 		return w.persistErr
@@ -137,6 +139,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	now := time.Now()
 	unread := []companion.ConversationEvent{}
 	mediaIDs := []string{}
+	preferredShares := map[string]bool{}
 	var anchor *linuxnative.Message
 	var anchorInput companion.Input
 	var allIDs []string
@@ -153,6 +156,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 		}
 		working := m
 		isMedia := m.Type == 3 || m.Type == 34 || m.Type == 43 || m.Type == 47 || m.Type == 49 && !m.IsQuotedText()
+		onDemandAttachment := isMedia && w.config.OnDemandAttachment != nil && w.config.OnDemandAttachment(m)
 		body := messageSummary(m)
 		original := ""
 		if m.Type == 1 {
@@ -171,7 +175,9 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 				working.Body = w.config.Prefix + working.Body
 			}
 		}
-		_, eligible := w.promptWithSharePreference(working, now, w.considerPreferredShare(m))
+		preferredShare := w.preferredGroupShare(m)
+		hostedPreferred := preferredShare && w.config.PreferredGroupShare != nil && w.config.ReadPreferredGroupShare != nil
+		_, eligible := w.promptWithSharePreference(working, now, preferredShare)
 		w.noticeConversationMessage(m, eligible)
 		if stoppedVoice := w.stopRequestedVoice(ctx, working); stoppedVoice {
 			if replacesVoice(working.Body) {
@@ -185,16 +191,25 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 			}
 		}
 		selectAnchor := eligible && (live == nil || anchor == nil || !w.addressed(*anchor) || w.addressed(m))
+		if selectAnchor && m.Type == 43 && w.hasScopedMedia(m) && !w.addressed(m) && anchor != nil && w.addressed(*anchor) && (anchor.Type == 1 || anchor.IsQuotedText()) {
+			selectAnchor = false
+		}
 		if selectAnchor {
 			copy := m
 			anchor = &copy
 		}
 		allIDs = append(allIDs, m.ID)
-		if isMedia && w.readMediaBeforeDecision(m) && (strings.HasSuffix(thread, "@chatroom") || eligible && w.observationAllowed(m) && w.config.Analyzer != nil) {
+		if hostedPreferred {
+			preferredShares[m.ID] = true
+		}
+		canAnalyze := isMedia && w.mediaAnalyzer(ctx, m) != nil
+		needsGroupRead := strings.HasSuffix(thread, "@chatroom") && (!w.hasScopedMedia(m) || canAnalyze)
+		if isMedia && !onDemandAttachment && !hostedPreferred && w.readMediaBeforeDecision(m) && (needsGroupRead || eligible && w.observationAllowed(m) && canAnalyze) {
 			mediaIDs = append(mediaIDs, m.ID)
 		}
 		observed := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: m.SenderID, TraceID: m.ID, Text: body, MessageTime: m.CreatedAt, OriginalText: &original}
 		bindInputSource(&observed, m, c)
+		observed.Source.Sequence = sequences[m.ID]
 		if err := c.Store.Observe(observed, c.Config, now); err != nil {
 			return err
 		}
@@ -212,7 +227,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	// Use a real source message for routing/authorization. Other speakers remain
 	// contextual data, never aliases for the anchor's authenticated sender.
 	in := companion.Input{Channel: w.config.Channel, Account: w.source.Account(), Thread: thread, Sender: anchor.SenderID, TraceID: anchor.ID, MessageTime: anchor.CreatedAt, QuoteServerID: anchor.ServerID, Mode: "social", IsGroup: strings.HasSuffix(thread, "@chatroom"), Directed: w.addressed(*anchor), PersonaOverride: w.config.GroupRules[thread].Persona, UnreadMessages: unread, UnreadMediaIDs: mediaIDs, HistoryObserved: true,
-		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。"}
+		Text: "这是重新上线后本会话尚未查看的一段未读消息。按unread_messages里的真实时间和发言者整体理解，结合后续消息判断哪些事项仍需要回复或行动；不逐条追着旧话补答。自然回应，也可以安静。", GroupShareSummary: preferredShares[anchor.ID]}
 	if live != nil {
 		for i := range unread {
 			if unread[i].Sender != anchor.SenderID {
@@ -224,13 +239,27 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	// The digest is runtime context. Bind its dispatch to the actual incoming
 	// message, without treating the digest as the anchor author's literal words.
 	in.Source, in.QuotedSource = anchorInput.Source, anchorInput.QuotedSource
+	in.IncomingMedia = append([]companion.IncomingMediaRef(nil), anchorInput.IncomingMedia...)
+	in.HistoryObserved = true
 	if c.Config.Permissions.Remember {
 		if source, ok := c.Store.SourceForInput(anchorInput); ok {
 			in.Source = source
 		}
 	}
-	if !in.IsGroup || in.Directed {
+	if !in.IsGroup || in.Directed || w.config.GroupRules[thread].Mode == "all" {
 		in.Mode = "direct"
+	}
+	if in.GroupShareSummary {
+		// This mode is host-authorized but not a fabricated @ mention. The
+		// durable marker is preserved through model retry/restart and is
+		// rechecked by the host before delivery.
+		if !w.addressed(*anchor) {
+			in.Mode, in.Directed, in.MustReply = "direct", false, false
+		}
+		if err := w.persistPreferredGroupShareSource(c, &in); err != nil {
+			w.stopUnreadableTurn(in, err)
+			return w.persistErr
+		}
 	}
 	if in.Directed && anchor.Mentions.Self != nil && *anchor.Mentions.Self {
 		in.MustReply = w.config.GroupRules[thread].ForceReplyWhenMentioned
@@ -264,7 +293,13 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 	if w.generation != nil {
 		w.startGeneration(ctx, c, in, nil)
 	} else {
-		if err := w.prepareBatchObservations(ctx, c, &in); err != nil {
+		if in.GroupShareSummary {
+			if err := w.readPreparedPreferredGroupShare(ctx, c, &in, *anchor); err != nil {
+				w.stopUnreadableTurn(in, err)
+				return w.persistErr
+			}
+		}
+		if err := w.prepareBatchObservations(ctx, c, &in, w.activity); err != nil {
 			var failure *groupObservationFailure
 			if errors.As(err, &failure) {
 				w.stopUnreadableTurn(in, failure)
@@ -279,7 +314,7 @@ func (w *Worker) processConversationBatch(ctx context.Context, thread string, li
 
 // Reads may block; the production caller runs this on its generation worker.
 // The store serializes each source-scoped observation update transaction.
-func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engine, in *companion.Input) error {
+func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engine, in *companion.Input, report func(Record)) error {
 	required := make(map[string]bool, len(in.UnreadMediaIDs))
 	for _, id := range in.UnreadMediaIDs {
 		required[id] = true
@@ -306,10 +341,16 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 			}
 		}
 		stop()
-		if ctx.Err() == context.Canceled {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err != nil && in.IsGroup {
+			if w.hasScopedMedia(linuxnative.Message{Type: 43}) && independentGroupTextRequest(in, *event) {
+				event.MediaReadFailed = true
+				report(Record{Event: "background_video_read_failed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID,
+					RelatedMessageID: id, Status: "incomplete", Reason: observationReason(err), Content: "背景视频未读到内容，继续独立文字请求。"})
+				continue
+			}
 			return &groupObservationFailure{reason: observationReason(err), messageID: id}
 		}
 		if err != nil {
@@ -326,4 +367,23 @@ func (w *Worker) prepareBatchObservations(ctx context.Context, c *companion.Engi
 		return &groupObservationFailure{reason: "media_batch_source_missing", messageID: in.TraceID}
 	}
 	return nil
+}
+
+// A different sender's ordinary video can remain background for a verified
+// text request. Keep the existing failure policy when it is the actual target,
+// shares the requester, or is explicitly referenced anywhere in this batch.
+func independentGroupTextRequest(in *companion.Input, media companion.ConversationEvent) bool {
+	if !in.Directed || media.Source == nil || media.Source.MessageType != 43 || media.MessageID == in.TraceID || media.Sender == "" || media.Sender == in.Sender {
+		return false
+	}
+	anchorText := false
+	for _, event := range in.UnreadMessages {
+		if event.ReplyTo != nil && event.ReplyTo.MessageID == media.MessageID {
+			return false
+		}
+		if event.MessageID == in.TraceID && event.Sender == in.Sender && event.NewRequest && event.Source != nil {
+			anchorText = event.Source.MessageType == 1 || event.Source.MessageType == 49 && event.ReplyTo != nil
+		}
+	}
+	return anchorText
 }

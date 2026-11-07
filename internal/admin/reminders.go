@@ -246,6 +246,10 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 					if t.Reminder.QuoteServerID != "" && t.Reminder.QuoteMessageID != "" {
 						request.Quote = &linuxnative.ToolQuote{MessageID: t.Reminder.QuoteMessageID, ServerID: t.Reminder.QuoteServerID}
 					}
+					if err = m.checkWechatSubmission(checkCtx); err != nil {
+						cancel()
+						return
+					}
 					status, err = native.Submit(checkCtx, request)
 				}
 			}
@@ -268,6 +272,10 @@ func (m *Manager) tickReminders(ctx context.Context, now time.Time) {
 						m.agent.mu.Unlock()
 						if active {
 							if err = validateReminderSource(checkCtx, m, t, t.Reminder.Text); err == nil {
+								if err = m.checkWechatSubmission(checkCtx); err != nil {
+									cancel()
+									return
+								}
 								status, err = retry.RetryMediaJob(checkCtx, t.Reminder.Job)
 							}
 						}

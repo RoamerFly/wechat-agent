@@ -30,11 +30,17 @@ SERVICE_MARKERS = {
 # Reviewed semantic contracts, not a source/commit baseline. A new ID needs
 # explicit authority/readiness review. False means a future capability stays hidden.
 CAPABILITIES = {
+    "audio-workshop": {"audio.prepare": (True, {"artifact.read", "artifact.write"})},
+    "comfyui": {"comfyui.workflows": (True, {"gpu"}), "comfyui.run": (True, {"artifact.write", "gpu"}), "comfyui.job": (True, {"artifact.write", "gpu"})},
+    "document-workshop": {"document.inspect": (True, {"artifact.read"}), "document.reconstruct": (True, {"artifact.read", "artifact.write"}), "document.export_pdf": (True, {"artifact.read", "artifact.write"}), "document.verify": (True, {"artifact.read", "artifact.write"})},
     "external-tools": {"external.http_request": (True, {"network"}), "external.job_request": (True, {"network"}), "external.mcp_request": (True, {"network"}), "external.poll_request": (True, {"network"}), "external.discover": (False, {"network"}), "external.call": (False, {"network"})},
     "media-understanding": {"media.observe": (True, {"artifact.read", "model.invoke"}), "media.transcribe": (True, {"artifact.read", "model.invoke"}), "media.listen": (True, {"artifact.read", "model.invoke"})},
     "mobile-control": {"device.plan": (True, {"model.invoke"}), "device.list": (True, {"device"}), "device.observe": (True, {"device"}), "device.act": (True, {"device"}), "device.record": (True, {"device"}), "device.read_artifact": (True, {"device"}), "device.workflow": (True, {"device", "model.invoke"})},
     "music": {"music.generate": (True, {"model.invoke"}), "music.bridge_request": (True, {"network"}), "music.service_control": (True, {"network"}), "music.prepare": (True, {"network"}), "music.cover": (False, set()), "music.train": (False, set())},
     "project-development": {"project.workspace_read": (True, {"workspace.read"}), "project.workspace_write": (True, {"workspace.write"}), "project.workspace_execute": (True, {"process.execute"})},
+    "rvc": {"rvc.convert": (True, {"artifact.read", "artifact.write", "gpu"})},
+    "station-speech": {"station-speech.voices": (True, {"artifact.write", "gpu"}), "station-speech.synthesize": (True, {"artifact.write", "gpu"})},
+    "yue": {"yue.generate": (True, {"artifact.read", "artifact.write", "gpu"}), "yue.job": (True, {"artifact.read", "artifact.write", "gpu"})},
     "share-reader": {"share.read": (False, set()), "share.resolve_public": (True, {"network"}), "share.resolve_channels": (True, {"network"})},
     "speech": {"speech.synthesize": (True, {"model.invoke"}), "speech.synthesize_named": (True, {"artifact.read", "model.invoke"}), "speech.voices": (False, set()), "speech.train": (False, set())},
     "visual-generation": {"visual.generate": (False, {"network", "artifact.write"})},

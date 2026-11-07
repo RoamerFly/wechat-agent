@@ -112,6 +112,12 @@ func TestOwnerCrossReadAndForwardUsesRealAttachmentAndReceipt(t *testing.T) {
 	}
 	// Synthetic worker submission, no real WeChat connection.
 	n.Submit(context.Background(), linuxnative.ToolSend{ThreadID: seeds[0].Input.Thread, Kind: "file", SourceID: seeds[0].SourceID, IdempotencyKey: seeds[0].Key})
+	f.login()
+	receipt := readAppTestReceipt(t, f, submitted.Operation)
+	if receipt.State != "accepted" || receipt.Kind != "file" || len(receipt.Deliveries) != 1 ||
+		receipt.Deliveries[0].IdempotencyKey != seeds[0].Key || receipt.Deliveries[0].ServerID != "123456" {
+		t.Fatal("forwarded file receipt did not match its original delivery", receipt)
+	}
 	statusArgs, _ := json.Marshal(map[string]string{"operation_id": submitted.Operation})
 	status, err := p.Call(context.Background(), "wechat_operation_status", statusArgs)
 	if err != nil || !strings.Contains(status, `"state":"accepted"`) {

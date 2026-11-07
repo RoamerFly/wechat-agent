@@ -139,6 +139,12 @@ func (p *projectPluginPolicy) toolIndex(ctx context.Context) projectPluginObserv
 	if store, err := p.p.manager.packageStore(); err == nil {
 		if installed, listErr := store.List(ctx); listErr == nil {
 			for _, item := range installed {
+				// Keep archived device work visible through its history endpoints,
+				// but never advertise mobile-control through the generic project
+				// discovery index on Windows production.
+				if item.Package.ID == mobileDevicePluginID && p.p.manager.mobileRetired {
+					continue
+				}
 				class := map[string]string{
 					"music":               "gpu-media",
 					"speech":              "speech",

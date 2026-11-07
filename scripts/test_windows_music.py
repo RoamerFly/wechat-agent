@@ -15,6 +15,21 @@ from managed_music_runner import launch_windows
 from music_unix_client import open_request
 
 
+def native_parent_fields():
+    if os.name != "nt":
+        return {}
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+    kernel.GetProcessTimes.restype = wintypes.BOOL
+    created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
+    if not kernel.GetProcessTimes(kernel.GetCurrentProcess(), ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return {"parent_pid": os.getpid(), "parent_created_filetime": (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)}
+
+
 class MusicBrokerPolicyTests(unittest.TestCase):
     def test_nltk_pronunciation_resources_keep_verified_zip_and_reject_tampering(self):
         import tempfile
@@ -65,6 +80,58 @@ class MusicBrokerPolicyTests(unittest.TestCase):
                 result = json.loads(path.with_name("result.json").read_text())
                 self.assertIn(error, result["error"])
                 self.assertEqual(result["exit_code"], -1)
+
+    def test_offline_speech_policy_is_direct_only_and_never_requests_music_network_policy(self):
+        import tempfile
+        from unittest.mock import patch
+
+        class Child:
+            pid = 1
+            returncode = 0
+            def poll(self): return 0
+
+        run = runpy.run_path(str(Path(__file__).with_name("windows_agent_host.pyw")))["run"]
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            request = base / "request.json"
+            request.write_text(json.dumps({
+                "sandbox": True, "cwd": str(base), "roots": [str(base)], "read_only": [],
+                "argv": [str(base / "trusted-python.exe"), "-c", "print('speech')"], "command": "",
+                "music_policy": "registry-read-offline-speech-v1",
+                "environment": {"NLTK_DATA": str(base / "nltk"), "WECHAT_WINDOWS_SPEECH_RUNTIME": "1"},
+                **native_parent_fields(),
+            }), encoding="utf8")
+            with patch("windows_lpac.launch", return_value=Child()) as launch:
+                run(request)
+            result = json.loads(request.with_name("result.json").read_text(encoding="utf8"))
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertFalse(launch.call_args.kwargs["music_runtime"])
+            self.assertTrue(launch.call_args.kwargs["speech_runtime"])
+            self.assertEqual(launch.call_args.kwargs["environment"]["WECHAT_WINDOWS_SPEECH_RUNTIME"], "1")
+            # The launch keeps argv in memory, but the durable current-run
+            # control record must not retain text that may be spoken aloud.
+            scrubbed = request.read_text(encoding="utf8")
+            self.assertIn("offline_speech_request_arguments", scrubbed)
+            self.assertNotIn("trusted-python", scrubbed)
+
+    @unittest.skipUnless(os.name == "nt", "native parent identity is Windows-only")
+    def test_offline_speech_rejects_reused_or_forged_parent_pid(self):
+        import tempfile
+        from unittest.mock import patch
+        run = runpy.run_path(str(Path(__file__).with_name("windows_agent_host.pyw")))["run"]
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            request = base / "request.json"
+            identity = native_parent_fields()
+            identity["parent_created_filetime"] += 1
+            request.write_text(json.dumps({"sandbox": True, "cwd": str(base), "roots": [str(base)], "read_only": [],
+                "argv": [str(base / "trusted-python.exe"), "-c", "print('never')"], "command": "",
+                "music_policy": "registry-read-offline-speech-v1", **identity}), encoding="utf8")
+            with patch("windows_lpac.launch") as launch:
+                run(request)
+            result = json.loads(request.with_name("result.json").read_text(encoding="utf8"))
+            self.assertIn("broker_parent_unavailable", result.get("error", ""))
+            launch.assert_not_called()
 
 
 @unittest.skipUnless(os.name == "nt" and os.environ.get("WECHAT_WINDOWS_MUSIC_TEST_PYTHON"), "opt-in managed Windows Python")

@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/sharespec"
@@ -82,7 +84,7 @@ func matchNativeChannelsVideo(source linuxnative.ChannelsSource, video sharespec
 }
 
 func (m *Manager) resolveReceivedChannels(ctx context.Context, msg linuxnative.Message, source linuxnative.ChannelsSource) (linuxnative.ChannelsSource, error) {
-	if source.AccountID != m.native.Account() || source.ThreadID != msg.ThreadID || source.MessageID != msg.ID || msg.Direction != "incoming" {
+	if !wechatapp.MatchesChannelsMessage(msg, m.native.Account(), source) || msg.Direction != "incoming" {
 		return source, errors.New("channels_source_scope_mismatch")
 	}
 	if installed, err := m.installedShareState(ctx); installed {

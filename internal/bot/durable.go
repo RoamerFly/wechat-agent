@@ -132,7 +132,7 @@ func (w *Worker) loadRuntime(server string) error {
 	if e != nil && !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	if e == nil && (len(b) > 24<<20 || json.Unmarshal(b, &s) != nil || s.Version != 1 || s.Server != server || s.Account != w.source.Account()) {
+	if e == nil && (len(b) > 24<<20 || json.Unmarshal(b, &s) != nil || !SupportedDeliveryCheckpointVersion(s.Version) || s.Server != server || s.Account != w.source.Account()) {
 		return errors.New("persistent queue corrupt or account mismatch")
 	}
 	if len(s.Inbox) > 5000 || len(s.Deliveries) > 3000 || len(s.Media) > 1000 || len(s.MediaReplies) > 1000 {
@@ -165,6 +165,9 @@ func (w *Worker) loadRuntime(server string) error {
 			return errors.New("persistent media invalid")
 		}
 		media.Input.TraceID = media.Trace
+		if media.ResumeOriginID != "" {
+			s.Version = 2
+		}
 		restoreOriginInputTrace(media.OriginInput)
 		if media.State != "checking_receipt" && awaitingMediaReceipt(media) && media.ReconcileAfter.IsZero() && media.Next.After(time.Now()) {
 			// Legacy queues used one deadline for both reads and writes. Keep
@@ -312,6 +315,10 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	defer w.closeGenerations()
 	defer w.suspendMedia()
 	w.recoverFollowups()
+	w.applyDeliveryCancellations()
+	if w.persistErr != nil {
+		return w.persistErr
+	}
 	for i := range w.runtime.Inbox {
 		item := &w.runtime.Inbox[i]
 		if item.ToolStarted && (item.Phase == "tool_running" || item.Phase == "processing" || item.Phase == "model_running") {
@@ -381,6 +388,10 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 	}
 	peekedInterruptions := map[string]bool{}
 	for ctx.Err() == nil {
+		w.applyDeliveryCancellations()
+		if w.persistErr != nil {
+			return w.persistErr
+		}
 		w.collectGenerations(ctx)
 		w.adoptMediaSeeds()
 		if w.draining() {
@@ -456,6 +467,12 @@ func (w *Worker) runDurable(ctx context.Context, path string, state checkpoint) 
 		// submitted. A stop request on page two is already-arrived context too.
 		if len(page.Items) >= 100 {
 			continue
+		}
+		// Consume all already-arrived interruptions before starting an explicit
+		// host continuation, just as with deferred media and captions below.
+		w.processHostMediaResume(ctx)
+		if w.persistErr != nil {
+			return w.persistErr
 		}
 		w.reviewActiveGenerations(ctx)
 		w.drainGenerations(ctx)

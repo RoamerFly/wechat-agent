@@ -2,12 +2,35 @@ package linuxnative
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 )
+
+func TestCatalogExplicitPageSizeAndResponseBoundary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Query().Get("limit") != "75" || r.URL.Query().Get("cursor") != "native-page" || r.URL.Query().Get("search") != "some words" {
+			t.Error("requested pagination changed", r.URL)
+		}
+		rows := make([]map[string]any, 70)
+		for i := range rows {
+			rows[i] = map[string]any{"id": "synthetic", "displayName": "member", "secret": "must be stripped"}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": rows, "nextCursor": "next-native", "coverage": "page"})
+	}))
+	defer server.Close()
+	s := testSender(t, server.URL)
+	page, err := s.CatalogWithLimit(t.Context(), "members", "room@chatroom", "some words", "native-page", 75)
+	if err != nil || len(page.Items) != 70 || page.Items[0]["secret"] != nil || page.NextCursor == nil || *page.NextCursor != "next-native" {
+		t.Fatal(page, err)
+	}
+	if _, err = s.CatalogWithLimit(t.Context(), "members", "room@chatroom", "", "", 0); err == nil {
+		t.Fatal("invalid page size accepted")
+	}
+}
 
 func TestMemberCatalogRetriesTransientReadWithoutWriting(t *testing.T) {
 	var calls atomic.Int32

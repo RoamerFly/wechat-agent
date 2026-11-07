@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -34,7 +35,7 @@ func (p *permittedTools) capabilities() []capabilityAdapter {
 		{"private-voice-enrollment", p.enrollmentTools, namedTools("voice_enroll"), p.callEnrollment},
 		{"installed-services", p.servicePluginTools, namedTools("service_plugins", "service_plugin_call", "service_plugin_task"), p.callServicePlugin},
 		{"video-inspection", p.videoTools, namedTools("video_inspect"), p.callVideoInspection},
-		{"wechat-communication", p.wechatCommunicationTools, func(n string) bool { return strings.HasPrefix(n, "wechat_") }, p.callAgent},
+		{"wechat-communication", p.wechatCommunicationTools, wechatapp.ToolName, p.callAgent},
 		{"workspace-agent", p.workspaceAgentTools, workspaceAgentToolName, p.callAgent},
 		{"mobile", p.mobileTools, func(n string) bool { return strings.HasPrefix(n, "device_") }, p.callMobile},
 		{"plugin-jobs", p.pluginTaskTools, namedTools("plugin_job_status", "plugin_job_cancel"), p.callPluginJob},

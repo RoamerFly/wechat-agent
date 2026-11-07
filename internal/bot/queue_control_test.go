@@ -10,6 +10,12 @@ import (
 	"wechat-bot/internal/linuxnative"
 )
 
+func originalResumeReceipt(n *mediaFake, d *mediaDelivery) {
+	n.status = d.Status
+	n.status.ID, n.status.State, n.status.ThreadID = d.ID, "cancelled", d.Input.Thread
+	n.status.SourceID, n.status.AccountID, n.status.Kind = d.SourceID, d.Input.Account, "send"
+}
+
 func TestQueuePauseResumeCancelPreservesIdentityAndIsolation(t *testing.T) {
 	w, n, _, _ := mediaWorker(t)
 	old := companion.Input{Account: "test", Thread: "room@chatroom", Sender: "owner", TraceID: "old"}
@@ -79,6 +85,7 @@ func TestQueueResumeCancelledVoiceReportsSafeContinuationBoundary(t *testing.T) 
 	d := &mediaDelivery{Key: "cancelled-segments", Trace: base.TraceID, ID: "cancelled-job", Input: base, Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
 	w.runtime.Media = []*mediaDelivery{d}
 	in := companion.Input{Account: "test", Thread: d.Input.Thread, Sender: d.Input.Sender, TraceID: "new-control"}
+	originalResumeReceipt(n, d)
 	result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
 	if err != nil || !strings.Contains(result, "native_resume_missing_identity_mismatch") || !strings.Contains(result, `"accepted_parts":1`) || !strings.Contains(result, `"total_parts":2`) || !d.UserCancelled || d.State != "stopped" || n.sends != 0 || n.retries != 0 {
 		t.Fatalf("cancelled voice was presented as resumable: result=%s err=%v delivery=%+v sends=%d retries=%d", result, err, d, n.sends, n.retries)
@@ -89,6 +96,7 @@ func TestQueueResumeMissingCreatesNewTraceAndNeverMutatesCancelledJob(t *testing
 	w, n, _, base := mediaWorker(t)
 	old := &mediaDelivery{Key: "cancelled-segments", Trace: base.TraceID, ID: "cancelled-job", Input: base, SourceID: "source", Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
 	w.runtime.Media = []*mediaDelivery{old}
+	originalResumeReceipt(n, old)
 	n.resumeStatus = linuxnative.ToolStatus{ID: "new-missing-parts-job", State: "queued", ThreadID: old.Input.Thread, SourceID: old.SourceID, VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 2, State: "queued"}}}
 	in := companion.Input{Account: "test", Thread: old.Input.Thread, Sender: old.Input.Sender, TraceID: "explicit-resume-message"}
 	raw := json.RawMessage(`{"action":"resume","trace_id":"incoming"}`)
@@ -115,6 +123,7 @@ func TestQueueResumeMissingRejectsUnsettledChunks(t *testing.T) {
 	w, n, _, base := mediaWorker(t)
 	d := &mediaDelivery{Key: "unsettled", Trace: base.TraceID, ID: "old-job", Input: base, SourceID: "source", Kind: "voice", State: "cancelling", UserCancelled: true, Status: linuxnative.ToolStatus{VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "running"}}}}
 	w.runtime.Media = []*mediaDelivery{d}
+	originalResumeReceipt(n, d)
 	in := companion.Input{Account: "test", Thread: d.Input.Thread, Sender: d.Input.Sender, TraceID: "explicit-resume-message"}
 	result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
 	if err != nil || n.resumes != 0 || len(w.runtime.Media) != 1 || !strings.Contains(result, "media_resume_missing_requires_verified_terminal_chunks") {
@@ -126,6 +135,7 @@ func TestQueueResumeMissingRejectsIncompleteChunkInventory(t *testing.T) {
 	w, n, _, base := mediaWorker(t)
 	d := &mediaDelivery{Key: "incomplete", Trace: base.TraceID, ID: "old-job", Input: base, SourceID: "source", Kind: "voice", State: "stopped", UserCancelled: true, Status: linuxnative.ToolStatus{VoicePartsIncomplete: true, VoiceChunks: []linuxnative.VoiceChunkStatus{{Index: 1, State: "accepted", HasReceipt: true, ServerID: "one"}, {Index: 2, State: "cancelled"}}}}
 	w.runtime.Media = []*mediaDelivery{d}
+	originalResumeReceipt(n, d)
 	in := companion.Input{Account: "test", Thread: d.Input.Thread, Sender: d.Input.Sender, TraceID: "explicit-resume-message"}
 	result, err := w.controlQueue(context.Background(), in, false, json.RawMessage(`{"action":"resume","trace_id":"incoming"}`))
 	if err != nil || n.resumes != 0 || !strings.Contains(result, "media_resume_missing_requires_verified_terminal_chunks") {

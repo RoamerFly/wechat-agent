@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "kind": "station-public-observer",
+  "host_entrypoint": "bilibili-public",
+  "connection_authority": "host",
+  "connection": "public",
+  "authentication": "anonymous",
+  "publication": {
+    "connection": "publish",
+    "authentication": "owner-registered OAuth",
+    "private_settings": "publication-settings.json"
+  },
+  "observation_fields": [
+    "title",
+    "body",
+    "page_text",
+    "playback",
+    "comments",
+    "audio"
+  ]
+}

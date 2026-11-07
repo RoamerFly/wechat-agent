@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"wechat-bot/internal/mcptools"
+	"wechat-bot/internal/mediaspec"
 	"wechat-bot/internal/plugins"
 )
 
@@ -101,9 +102,7 @@ func preparePublicAudioRange(ctx context.Context, dir string, data []byte, conve
 	return output, nil
 }
 
-func safeMediaFilename(name string) bool {
-	return name != "" && len(name) <= 512 && !strings.ContainsAny(name, "/\\\x00\r\n")
-}
+func safeMediaFilename(name string) bool { return mediaspec.SafeFilename(name) }
 
 func extractPublicAudioFile(ctx context.Context, dir string, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)

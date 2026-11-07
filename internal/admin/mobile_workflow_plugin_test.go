@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"wechat-bot/internal/devicebroker"
 	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -186,7 +185,7 @@ func (x *workflowFixture) start(t *testing.T) mobile.Task {
 	}
 	installed, _ := x.store.Installed(t.Context(), mobileDevicePluginID)
 	directory, _ := x.store.PackageDirectory(installed.Digest)
-	x.service.bridges[task.ID] = &mobileDevicePluginBridge{manager: x.f.manager, store: x.store, controller: x.f.manager.packageRuntime, installed: installed, task: task, settings: x.service.Settings(), packageDir: directory, brokerOpener: func(context.Context, devicebroker.Options) (devicebroker.IOBroker, error) { return x.fake, nil }, observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{}}
+	x.service.bridges[task.ID] = &mobileDevicePluginBridge{manager: x.f.manager, store: x.store, controller: x.f.manager.packageRuntime, installed: installed, task: task, settings: x.service.Settings(), packageDir: directory, brokerOpener: func(context.Context, mobile.IOOptions) (mobile.IOBroker, error) { return x.fake, nil }, observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{}}
 	return task
 }
 func (x *workflowFixture) tick(t *testing.T) {

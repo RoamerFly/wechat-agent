@@ -397,7 +397,12 @@ func (e *Engine) unreadEvidence(in Input) []map[string]any {
 		}
 		if ev, ok := e.replyReferenceEvent(context.Background(), in, ref); ok {
 			t := Turn{Role: ev.Role, Text: ev.Text, FullText: ev.Text, HasOriginal: true, UserTextState: ev.UserTextState, Sender: ev.Sender, SenderName: ev.SenderName, TraceID: ev.Trace, EventID: ev.ID, Source: ev.Source, QuotedSource: ev.QuotedSource, Addressees: ev.Addressees, IncomingMedia: ev.IncomingMedia}
-			rows = append(rows, e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4)))
+			row := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
+			if event.MediaReadFailed && ev.Source != nil && ev.Source.MessageType == 43 && ev.Trace == event.MessageID && ev.Sender == event.Sender {
+				row["media_read_status"] = "此视频读取失败，未取得内容证据。只处理本回合其他独立请求。"
+				delete(row, "media_observations")
+			}
+			rows = append(rows, row)
 		} else {
 			rows = append(rows, map[string]any{"message_id": event.MessageID, "message_sender_id": event.Sender, "text": "", "user_text_state": "unknown", "evidence_kind": "unverified_event_reference", "source": event.Source})
 		}
@@ -427,6 +432,9 @@ func (e *Engine) refreshEvidenceRow(row map[string]any, ev MemoryEvent) {
 		t.FullText = ""
 	}
 	fields := e.turnEvidenceFields(ev.Scope, t, max(512, e.Config.ContextConfig().MaxInputChars/4))
+	if row["media_read_status"] != nil {
+		delete(fields, "media_observations")
+	}
 	for _, key := range []string{"text", "literal_user_text", "user_text_state", "evidence_kind", "media_observations", "source", "quoted_source", "quote_chain", "quoted_by_id", "quoted_author_id", "addressees", "speaker_id", "speaker", "speaker_name_source", "message_sender_id", "message_sender_name", "message_sender_name_source", "incoming_I_means", "uploader_id", "voice_speaker_id", "voice_speaker_state", "at", "source_event_id", "text_excerpted", "full_text_bytes", "personal_context_redacted"} {
 		if value, ok := fields[key]; ok {
 			row[key] = value

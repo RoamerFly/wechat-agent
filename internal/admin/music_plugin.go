@@ -18,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
@@ -310,7 +311,7 @@ func (p *musicPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap p
 		reply, err := p.post(ctx, endpoint, headers, body, limit, timeout)
 		usage := deepseek.ReportedUsage(reply, time.Now().UTC())
 		usage.Model, usage.Purpose = p.model, "plugin_music_generation"
-		if p.p.manager.billing == nil || p.p.manager.billing.record(Config{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/audio/music/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
+		if p.p.manager.billing == nil || p.p.manager.billing.Record(billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/audio/music/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
 			return nil, errors.New("music_usage_record_failed")
 		}
 		if err != nil {

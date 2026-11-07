@@ -177,7 +177,8 @@ func TestShortMessageAggregationPreservesEachIdentityAndDoesNotMixSpeakers(t *te
 	w.runtime.Inbox = []inboxItem{{Event: fixtureEvent("1", "original", current.ThreadID, "incoming", "remote"), Phase: "processing"}, {Event: fixtureEvent("2", "peer", current.ThreadID, "incoming", "remote"), Phase: "received"}, {Event: fixtureEvent("3", "other", current.ThreadID, "incoming", "remote"), Phase: "received"}}
 	in.Thread = current.ThreadID
 	in.Text = current.Body
-	in.Source, in.OriginalText, in.MessageTime = nil, nil, current.CreatedAt
+	in.OriginalText, in.MessageTime = &current.Body, current.CreatedAt
+	bindInputSource(&in, current, c)
 	w.aggregateConversation(context.Background(), c, current, &in)
 	if !strings.Contains(in.Text, "再解释这个词") || w.runtime.Inbox[1].Phase != "aggregated" || w.runtime.Inbox[2].Phase != "received" {
 		t.Fatal("aggregation dropped or mixed messages", in.Text, w.runtime.Inbox)
@@ -186,6 +187,15 @@ func TestShortMessageAggregationPreservesEachIdentityAndDoesNotMixSpeakers(t *te
 	seen := map[string]bool{}
 	for _, turn := range scope.Messages {
 		seen[turn.TraceID] = true
+		if turn.TraceID == "peer" {
+			if turn.Source == nil || turn.Source.MessageID != peer.ID || turn.Source.Sequence != 2 {
+				t.Fatal("aggregated message inherited the anchor source", turn.Source)
+			}
+			at, err := time.Parse(time.RFC3339Nano, turn.Source.OccurredAt)
+			if err != nil || !at.Equal(stamp.Add(500*time.Millisecond)) {
+				t.Fatal("aggregated message inherited the anchor time", turn.Source, err)
+			}
+		}
 	}
 	if !seen["original"] || !seen["peer"] || seen["other"] {
 		t.Fatal("individual memory identities lost", seen)

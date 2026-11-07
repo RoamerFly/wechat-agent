@@ -1,5 +1,7 @@
 # Windows 桌面程序
 
+应用化重构的零应用预览使用 `./scripts/Build-Desktop.ps1 -LocalStation -OutputDirectory temp/local-station-preview`，打开输出的 `AgentHomeStation.exe`。它只启动本机聊天和家目录服务，使用独立数据、单例与控制通道，不要求微信原生包，也不会停止旧微信实例。[独立入口说明](../../docs/guide/local-home-preview.md)包含目录、配置和隔离 `-Test` 验证方式。下面描述仍可兼容使用的原微信桌面入口；尚未将真实登录和历史自动迁入新入口。
+
 双击 `WechatAgent.exe` 自动启动本机服务，窗口直接显示现有管理页，没有额外的启动控制台或外部浏览器窗口。右上角 **× 关闭窗口** 默认弹窗选择“取消／最小化到托盘运行／退出程序”，未勾选“记住此选项”时下次仍询问。选择退出才等待在途任务、停止全部本实例服务并退出；选择托盘则保持服务运行。可从托盘菜单“关闭窗口时”随时改回“每次询问”。普通 **最小化** 保留任务栏按钮；仅在关闭选择托盘或使用托盘菜单时隐藏窗口，双击托盘图标返回管理页。进入托盘不弹气泡提醒。托盘菜单另提供启动、停止服务、关于及明确的“退出并停止全部服务”。启动服务不会更改管理页中的 Agent 自动回复开关。
 
 首次打开默认最大化；收起到托盘后恢复上次的最大化/普通窗口状态。Windows 原生 EXE 直接在 Windows 执行，但当前上游底层使用 Linux 微信协议及设备标识，因此手机确认页会显示 Linux 电脑；这一标识不代表程序通过 WSL 运行，也不表示已切换为官方 Windows 客户端协议。
@@ -13,6 +15,8 @@
 ```powershell
 ./scripts/Build-Desktop.ps1 -OutputDirectory dist/windows-native -Test -Portable
 ```
+
+新 Windows 桌面构建从分发目录移除了旧手机控制工具和桥接脚本。若目标目录已有这些组件，构建会保留原目录并要求另选输出位置。旧设备任务与素材属于原部署的数据目录。原生 Windows 旧管理页可从工具列表的设备历史档案查看已保留的任务、截图和录屏；历史会话里的设备记录也可跳到该档案。
 
 首次源码构建需要 Go、Git、Python 3.13、FFmpeg/FFprobe 分发目录、Rust 1.93.1、MSVC C++/Windows SDK 和完整的原生 Windows Perl（例如 Strawberry Perl，可通过构建环境变量 `PERL` 指定）。这些是构建依赖，使用者无需安装。`Build-WindowsNative.ps1` 固定使用 `components/native-client/source-manifest.json` 的上游提交与累计补丁，核验补丁哈希；构建 `wx.exe` 和无 CGO 的 `wechat-admin.exe`，同时生成 SHA-256 清单和上游许可证。Go 管理端从本仓库当前提交的隔离快照构建，排除已有未提交工作；通常由清单记录该提交；本地开发可显式传入 `-GoSourcePatch <任务补丁>`，在隔离快照验证并应用，仅允许管理源码路径，并记录补丁 SHA-256。原生构建使用较短的 `temp/wn-target`，避免 OpenSSL/MSVC 嵌套长路径失败。原生程序位于便携包 `runtimes/windows-x64/`，不打包聊天和模型。`Prepare-WindowsResources.ps1` 将校验过的 Python CLI 和 FFmpeg/FFprobe 放在独立的 `runtimes/windows-python-cli`、`runtimes/windows-media`，保留版本、文件哈希与许可；可用 `-MediaDirectory` 指定实际媒体工具分发目录，不能复制依赖系统安装的 shim。程序包须整体复制。
 

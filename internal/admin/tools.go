@@ -158,6 +158,10 @@ func (s *Server) toolsSend(w http.ResponseWriter, r *http.Request) {
 	}
 	s.manager.op.Lock()
 	defer s.manager.op.Unlock()
+	if s.manager.connectionPaused() {
+		fail(w, 409, "微信连接已暂停，未提交发送")
+		return
+	}
 	c := s.manager.Config().Config
 	if !permittedRecipient(c, input.ThreadID) {
 		fail(w, 403, "这个接收方不在已授权回复会话中")
@@ -198,7 +202,7 @@ func (s *Server) toolsSend(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	status, err := native.Submit(ctx, input)
+	status, err := s.manager.submitWechat(ctx, native, input)
 	if err != nil {
 		initial.Reason = "submission_result_unknown_check_same_key"
 		_ = s.manager.tools.update(input.IdempotencyKey, initial)

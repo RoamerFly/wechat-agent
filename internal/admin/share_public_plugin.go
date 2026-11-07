@@ -21,6 +21,7 @@ import (
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
+	"wechat-bot/internal/strictjson"
 )
 
 type publicShareObservation struct {
@@ -62,6 +63,10 @@ type publicSharePolicy struct {
 	pages         map[string]string
 	locators      map[string]bool
 }
+
+func decodeShareJSON(raw []byte) (any, error) { return strictjson.Decode(raw) }
+
+func sameShareBody(raw json.RawMessage, expected any) bool { return strictjson.Matches(raw, expected) }
 
 func (m *Manager) newPublicSharePolicy(ctx context.Context, message linuxnative.Message) (*publicSharePolicy, error) {
 	base, err := m.newReceivedSharePolicyFor(ctx, message, "share.resolve_public")

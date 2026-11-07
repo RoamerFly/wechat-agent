@@ -32,6 +32,9 @@ func mobileAvailabilityMessage(err error) string {
 	if err == nil {
 		return ""
 	}
+	if errors.Is(err, errDeviceServiceRetired) {
+		return "手机控制已停用；仅可查看保留的任务、截图和录屏。"
+	}
 	switch err.Error() {
 	case "device_broker_runtime_registration_required":
 		return "手机原生执行器尚未完成隔离登记；已有设备和任务保留，当前不会执行实机操作。"
@@ -60,6 +63,23 @@ func (m *Manager) planMobile(ctx context.Context, t mobile.Task, o mobile.Observ
 }
 
 func (s *Server) mobileRoutes(mux *http.ServeMux) {
+	// A retired device service is deliberately a history reader, not a
+	// partially-working controller. Keep the two resource endpoints available
+	// for authenticated owners so a previously recorded screenshot or screen
+	// recording does not disappear merely because device control was removed.
+	// Do not register the device list, overview or any mutating route in this
+	// mode: a legacy client must not be able to revive observation or a queue.
+	if s.manager.mobileRetired {
+		mux.HandleFunc("GET /api/mobile", s.protected(func(w http.ResponseWriter, r *http.Request) {
+			if err := s.manager.mobile.InitializationError(); err != nil {
+				fail(w, http.StatusServiceUnavailable, "手机历史数据暂不可用，请检查本地存储；原记录未覆盖")
+				return
+			}
+			respond(w, 200, map[string]any{"archive": true, "tasks": s.manager.mobile.List(nil), "message": "手机控制已停用；仅可查看保留的任务、截图和录屏"})
+		}))
+		s.mobileArchiveResourceRoutes(mux)
+		return
+	}
 	mux.HandleFunc("GET /api/mobile", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if err := s.manager.mobile.InitializationError(); err != nil {
 			fail(w, 503, "设备服务数据暂不可用，请检查设备配置和存储；原数据未覆盖")
@@ -105,6 +125,10 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mobile/config", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "settings.save") }))
 	mux.HandleFunc("POST /api/mobile/tasks", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.create") }))
 	mux.HandleFunc("POST /api/mobile/tasks/{id}/cancel", s.protected(func(w http.ResponseWriter, r *http.Request) { s.mobileHostAction(w, r, "tasks.cancel") }))
+	s.mobileArchiveResourceRoutes(mux)
+}
+
+func (s *Server) mobileArchiveResourceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/mobile/tasks/{id}/screenshot/{observation}", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		data, err := s.manager.mobile.Screenshot(r.PathValue("id"), r.PathValue("observation"))
 		if err != nil {
@@ -130,6 +154,10 @@ func (s *Server) mobileRoutes(mux *http.ServeMux) {
 // mobileHostAction is the single protected implementation used by both the
 // legacy resource URLs and the mobile-control package's declarative UI.
 func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action string) {
+	if s.manager.mobileRetired {
+		fail(w, http.StatusGone, "手机控制已停用；保留任务、截图和录屏仅供查阅")
+		return
+	}
 	switch action {
 	case "overview.observe", "overview.bind", "overview.unbind", "overview.observation-apps", "overview.pause", "overview.takeover", "overview.resume":
 		var in struct {
@@ -166,7 +194,7 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 			if s.manager.fish == nil {
 				err = errors.New("device_fish_identity_unavailable")
 			} else {
-				_, _, err = s.manager.fish.bindDevice(s.manager.native.Account(), in.DeviceID)
+				_, _, err = s.manager.fish.BindDevice(s.manager.native.Account(), in.DeviceID)
 			}
 			if err == nil {
 				result = observer.Overview()
@@ -179,7 +207,7 @@ func (s *Server) mobileHostAction(w http.ResponseWriter, r *http.Request, action
 			if s.manager.fish == nil {
 				err = errors.New("device_fish_identity_unavailable")
 			} else {
-				err = s.manager.fish.unbindDevice(s.manager.native.Account(), in.DeviceID, in.BindingID)
+				err = s.manager.fish.UnbindDevice(s.manager.native.Account(), in.DeviceID, in.BindingID)
 			}
 			if err == nil {
 				// Revocation is persisted first.  Pausing immediately cancels any
@@ -389,17 +417,17 @@ func (m *Manager) analyzeDeviceArtifact(ctx context.Context, t mobile.Task, a mo
 	if err != nil {
 		return "", "", err
 	}
-	text, err := policy.observe(ctx)
+	text, err := policy.Observe(ctx)
 	if err != nil {
 		return "", "", err
 	}
-	if err := policy.checkCompleted(ctx); err != nil {
+	if err := policy.CheckCompleted(ctx); err != nil {
 		return "", "", err
 	}
 	summary = "[手机实际录屏观察；没有音轨，不是原视频；" + coverage + "] " + text
 	assetID = ""
 	if t.Source.Account != "" && t.Source.Thread != "" && m.Config().Companion.Permissions.Remember {
-		if err := policy.checkCompleted(ctx); err != nil {
+		if err := policy.CheckCompleted(ctx); err != nil {
 			return "", "", err
 		}
 		in := companion.Input{Channel: "wechat", Account: t.Source.Account, Thread: t.Source.Thread, Sender: t.Source.Sender, TraceID: t.Source.MessageID, TaskID: t.ID, Text: t.Goal}
@@ -408,7 +436,7 @@ func (m *Manager) analyzeDeviceArtifact(ctx context.Context, t mobile.Task, a mo
 			assetID = asset.ID
 		}
 	}
-	if err := policy.checkCompleted(ctx); err != nil {
+	if err := policy.CheckCompleted(ctx); err != nil {
 		return "", "", err
 	}
 	m.record(bot.Record{Event: "mobile_recording_observed", Category: "tool", ThreadID: t.Source.Thread, Sender: t.Source.Sender, MessageID: t.ID, Content: summary, Status: "observed", Reason: "device_recording_without_audio", Origin: "mobile", Bytes: int64(len(data))})
@@ -438,7 +466,7 @@ func singleRecordingFrame(ctx context.Context, dir string, data []byte) (deepsee
 }
 
 func (p *permittedTools) mobileTools() []mcptools.Tool {
-	if p.manager.mobile == nil || p.trace.Preview || p.trace.Surf || p.manager.draining() || !p.privileged() || !p.manager.mobile.Settings().Enabled {
+	if p.manager.mobileRetired || p.manager.mobile == nil || p.trace.Preview || p.trace.Surf || p.manager.draining() || !p.privileged() || !p.manager.mobile.Settings().Enabled {
 		return nil
 	}
 	settings := p.manager.mobile.Settings()
@@ -461,6 +489,9 @@ func (p *permittedTools) mobileToolEnabled(name string) bool {
 	return false
 }
 func (p *permittedTools) callMobile(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if p.manager.mobileRetired {
+		return "", toolInputError("device_task_retired")
+	}
 	if !p.mobileToolEnabled(name) {
 		return "", toolInputError("device_task_not_permitted")
 	}

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "service": "obs-preview",
+  "protocol": "station-obs-preview-host",
+  "protocol_version": 1,
+  "ownership": "user-managed-local-obs",
+  "operations": {
+    "start": "open_local_preview_and_capture_current_program_scene_jpeg",
+    "frame": "capture_current_program_scene_jpeg",
+    "stop": "close_local_preview"
+  },
+  "constraints": {
+    "endpoint": "host-enforced ws://127.0.0.1:<configured-port> only",
+    "authentication": "host-only configured OBS WebSocket password",
+    "scene": "current program scene only",
+    "lifetime": "local preview expires after 60 seconds without requests",
+    "excluded": "never start OBS, manipulate scenes, start or stop streaming, or manage OBS processes"
+  },
+  "execution": "This descriptor is declarative. A dedicated owner-management handler in the station host alone may connect to an explicitly enabled local OBS WebSocket v5 endpoint. It is not a generic MCP runtime and must not be exposed to model dispatch."
+}

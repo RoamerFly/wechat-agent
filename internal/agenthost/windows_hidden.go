@@ -144,7 +144,23 @@ func runWindowsPolicyRequest(ctx context.Context, cfg Config, id, path, command 
 			return e
 		}
 	}
+	// The hidden broker must be bound to this exact host process, rather than
+	// merely an integer PID (which Windows may later reuse).  If this process
+	// crashes, the broker observes the handle signal, exits, and its LPAC job's
+	// KILL_ON_JOB_CLOSE setting terminates the sandboxed child tree.
+	parentPID, parentCreated, e := windowsParentIdentity()
+	if e != nil {
+		return fmt.Errorf("Windows父进程身份不可核验：%w", e)
+	}
 	requestDocument := map[string]any{"cwd": winDir, "command": command, "argv": argv, "shell": shell, "sandbox": true, "roots": mounts, "read_only": readonly, "music_policy": policy, "environment": environment, "music_registration": registration, "gpu_authorized": cfg.Isolation.GPU}
+	// WSL can prepare a Windows request document but is not the native parent
+	// process of the eventual pythonw.exe.  Omit the pair there for deployed
+	// legacy generic helpers; an offline speech policy is rejected before this
+	// path on non-Windows (RunSpeechIsolated).
+	if parentCreated != 0 {
+		requestDocument["parent_pid"] = parentPID
+		requestDocument["parent_created_filetime"] = parentCreated
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline).Seconds()
 		if remaining <= 0 {

@@ -350,6 +350,29 @@ func (r *ManagedServices) Status(id string) ManagedServiceStatus {
 	return statusManagedService(r.processes[id])
 }
 
+// ProcessID returns only the PID of a still-running process this registry
+// started itself. It deliberately cannot import, discover or control an
+// external PID. Host adapters use this narrow proof to reject a listener that
+// raced their dedicated loopback port after admission.
+func (r *ManagedServices) ProcessID(id string) (int, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.processes[id]
+	if p == nil || p.stopping || p.command == nil || p.command.Process == nil {
+		return 0, false
+	}
+	select {
+	case <-p.done:
+		delete(r.processes, id)
+		return 0, false
+	default:
+	}
+	if p.command.Process.Pid <= 0 {
+		return 0, false
+	}
+	return p.command.Process.Pid, true
+}
+
 // Busy lets account removal/update barriers cover every registered adapter,
 // without adding a new typed Manager field for each service.
 func (r *ManagedServices) Busy() bool {

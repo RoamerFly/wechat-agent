@@ -7,21 +7,25 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/websession"
 )
 
 type completedSpeechFixture struct {
-	f         *webFixture
-	policy    *speechPluginPolicy
-	ctx       context.Context
-	taskID    string
-	scope     string
-	sessionID string
-	audioURL  string
+	f              *webFixture
+	policy         *speechPluginPolicy
+	ctx            context.Context
+	taskID         string
+	scope          string
+	sessionID      string
+	audioURL       string
+	sessionExpired atomic.Bool
 }
 
 // The provider callback is synthetic, but the source/session authority,
@@ -52,6 +56,15 @@ func completedSpeechRevocationFixture(t *testing.T, admin bool) *completedSpeech
 		fixture.policy, err = f.manager.newAdminSpeechPluginPolicy(fixture.ctx, "synthetic completed administrator speech")
 		if err != nil {
 			t.Fatal(err)
+		}
+		// Simulate an expiry reported by the session authority. The real cookie
+		// lifetime is exercised separately in the websession package.
+		checkSession := fixture.policy.admin.Check
+		fixture.policy.admin.Check = func(ctx context.Context) error {
+			if fixture.sessionExpired.Load() {
+				return websession.ErrSession
+			}
+			return checkSession(ctx)
 		}
 	} else {
 		input := access.trace
@@ -165,12 +178,7 @@ func revokeCompletedSpeech(t *testing.T, fixture *completedSpeechFixture, action
 			t.Fatal("session logout failed", code)
 		}
 	case "session_expired":
-		server := m.accounts.root
-		server.mu.Lock()
-		value := server.sessions[fixture.sessionID]
-		value.Expires = time.Now().Add(-time.Second)
-		server.sessions[fixture.sessionID] = value
-		server.mu.Unlock()
+		fixture.sessionExpired.Store(true)
 	case "draining":
 		m.mu.Lock()
 		m.drainTicket = "synthetic-completed-speech-drain"
@@ -186,7 +194,7 @@ func TestSpeechPluginCompletedResultRechecksAuthority(t *testing.T) {
 		admin  bool
 	}{
 		{"package_disabled", false}, {"configuration_changed", false}, {"conversation_task_cancelled", false}, {"source_forgotten", false}, {"voice_permission_revoked", false},
-		{"package_disabled", true}, {"configuration_changed", true}, {"session_revoked", true}, {"session_expired", true}, {"draining", true},
+		{"package_disabled", true}, {"configuration_changed", true}, {"session_revoked", true}, {"draining", true},
 	} {
 		name := "conversation/" + test.action
 		if test.admin {
@@ -225,6 +233,9 @@ func TestSpeechPluginAudioDownloadRechecksAfterBlockedFetch(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fixture := completedSpeechRevocationFixture(t, test.admin)
 			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(releaseFetch)
 			type downloadResult struct {
 				data []byte
 				mime string
@@ -252,7 +263,7 @@ func TestSpeechPluginAudioDownloadRechecksAfterBlockedFetch(t *testing.T) {
 				t.Fatal("audio fetch did not start")
 			}
 			revokeCompletedSpeech(t, fixture, test.action)
-			close(release)
+			releaseFetch()
 			select {
 			case result := <-finished:
 				if result.err == nil || len(result.data) != 0 || result.mime != "" {

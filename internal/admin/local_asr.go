@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -22,12 +23,12 @@ func (m *Manager) localASRStatus() map[string]any {
 		state["message"] = "媒体工具存储不可用"
 		return state
 	}
-	installed, err := store.Installed(ctx, localASRPluginID)
+	installed, err := store.Installed(ctx, localasr.PluginID)
 	if err != nil || installed.Removed || !installed.Enabled {
 		state["message"] = "媒体理解工具未安装或未启用"
 		return state
 	}
-	configuration, err := store.Configuration(ctx, localASRPluginID)
+	configuration, err := store.Configuration(ctx, localasr.PluginID)
 	if err != nil {
 		state["message"] = "媒体理解工具配置不可读取"
 		return state
@@ -48,8 +49,8 @@ func (m *Manager) localASRStatus() map[string]any {
 		return state
 	}
 	state["available"] = true
-	state["id"] = profile.initializer.ProfileID
-	state["resource_version"] = profile.initializer.ResourceVersion
+	state["id"] = profile.Metadata().ProfileID
+	state["resource_version"] = profile.Metadata().ResourceVersion
 	state["message"] = "本地语音识别资源已登记；实际识别仍会核验来源、授权和输入音频"
 	return state
 }

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "configuration",
+      "title": "本机 OBS 连接",
+      "component": "configuration"
+    },
+    {
+      "id": "preview",
+      "title": "节目预览",
+      "component": "resources"
+    },
+    {
+      "id": "diagnostics",
+      "title": "状态与日志",
+      "component": "diagnostics"
+    }
+  ]
+}

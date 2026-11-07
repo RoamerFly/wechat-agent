@@ -284,7 +284,7 @@ func TestMusicAudioOriginSchedulerRevocationDuringProviderAttempt(t *testing.T) 
 			if _, err = policy.Service(t.Context(), job, cap, "wechat/model_request", audioObservationRequest(policy)); err == nil || calls != 1 {
 				t.Fatal("revoked observation replayed provider", err, calls)
 			}
-			usage := f.manager.billing.data.Purposes["plugin_media_audio_observation"]
+			usage := f.manager.billing.PurposeTotals("plugin_media_audio_observation")
 			if usage.Requests != 1 || usage.Reported != 1 || usage.Input != 3 || usage.Output != 2 {
 				t.Fatal("revocation lost actual completed HTTP attempt usage", usage)
 			}

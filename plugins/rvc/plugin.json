@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "rvc",
+  "name": "RVC 换声",
+  "version": "0.1.0",
+  "host_protocol": 1,
+  "status": "ready",
+  "platforms": ["windows-amd64"],
+  "runtime": {"transport": "http-adapter", "entrypoint": "runtime/managed-service.json"},
+  "permissions": ["artifact.read", "artifact.write", "gpu"],
+  "dependencies": [],
+  "files": {
+    "capabilities.json": "567ea5b79baab396f679584e4c99f7c186e5bc452e9049b0a0c455bafb309180",
+    "CHANGELOG.md": "a783054e715a9eb32df9c08db123da943bfde5d3e59e0400e1739b6645609a4a",
+    "config.schema.json": "c104cf368d17c24cc0eccddadf5bed01149e7243f144a81e756a743e85307324",
+    "MIGRATION.md": "fdd78fa33a0db0156991ed5b4f79d4309605295c04fbc8fa70f6093a47711f21",
+    "PERMISSIONS.md": "507c7707e150ce35822adb58847d64916bde1fdb104cc557a48f3fce9acddfba",
+    "README.md": "c3362367d2eb4b481c1fb75140e57282ff0ec7f0889eb9c7f743c25299f8256d",
+    "runtime/managed-service.json": "d8e95c5eb9bf41fc335422a521b3a90ff5b9be66f2434c54579f5a187bf2a217",
+    "ui.schema.json": "d2d0a9ae5f531e4620ad5c51f40884d55694e1b95c57d5510b3875a443b8a35b"
+  }
+}

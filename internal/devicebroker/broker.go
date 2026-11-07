@@ -17,11 +17,12 @@ import (
 	"sync"
 
 	"wechat-bot/internal/adbserver"
+	"wechat-bot/internal/devicespec"
 	"wechat-bot/internal/mcptools"
 )
 
 var (
-	ErrNeedsMigration = errors.New("device_broker_needs_migration")
+	ErrNeedsMigration = devicespec.ErrNeedsMigration
 	ErrDeviceBusy     = errors.New("device_busy")
 	errChanged        = errors.New("device_broker_changed")
 	errToolDenied     = errors.New("device_broker_tool_not_permitted")
@@ -35,30 +36,33 @@ var (
 // verified package snapshot; this package does not accept a model-supplied
 // directory, command, script, environment, or endpoint.
 type Options struct {
-	inspectOnly        bool
-	Runner             IORunner // host-only bounded native executor; never JSON or plugin arguments
-	Python             string
-	PackageDirectory   string
-	CompatibilityEntry string
-	WorkspaceDirectory string
-	StateDirectory     string // the caller supplies the selected account's state directory
-	// GlobalLeaseDirectory is a private, host-owned directory shared by
-	// accounts. It must be inside the trusted deployment workspace but outside
-	// any account state directory so aliases cannot bypass a physical-device
-	// lease merely by changing accounts.
-	GlobalLeaseDirectory string
-	// ADBRoots is a bounded set of trusted deployment runtime directories. The
-	// legacy profile's adb path must be an exact non-reparsed child of one root.
-	ADBRoots []string
-	Account  string
-	Legacy   mcptools.ServerConfig
-	Devices  []string
-	Actions  []string // permitted side-effect actions; observe is a required read capability
+	devicespec.IOOptions
+	inspectOnly bool
+	Runner      IORunner // host-only bounded native executor; never JSON or plugin arguments
 	// ADBServer is a host-owned foreground server manager. Nil uses the
 	// process-wide managed server, never an MCP-session child.
 	ADBServer interface {
 		Acquire(context.Context, string) (adbserver.Lease, error)
 	}
+}
+
+// Host adapts the concrete broker for the legacy management service.
+type Host struct{}
+
+func (Host) Inspect(ctx context.Context, options devicespec.IOOptions) error {
+	return InspectIOOptions(ctx, Options{IOOptions: options})
+}
+
+func (Host) Grants(ctx context.Context, options devicespec.IOOptions) ([]devicespec.IOGrant, error) {
+	return InspectIOGrant(ctx, Options{IOOptions: options})
+}
+
+func (Host) Open(ctx context.Context, options devicespec.IOOptions) (devicespec.IOBroker, error) {
+	return OpenIO(ctx, Options{IOOptions: options})
+}
+
+func (Host) Cleanup() error {
+	return errors.Join(CleanupQuarantined(), adbserver.CleanupQuarantined())
 }
 
 // quarantinedRegistry keeps only brokers whose native-child cleanup was not

@@ -3,10 +3,19 @@ package bot
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
 )
+
+func sourceSequence(event linuxnative.Event) int64 {
+	sequence, err := strconv.ParseInt(event.Cursor, 10, 64)
+	if err != nil || sequence < 0 {
+		return 0
+	}
+	return sequence
+}
 
 func messageSource(m linuxnative.Message) companion.SourceRef {
 	h := sha256.Sum256([]byte(m.Body))

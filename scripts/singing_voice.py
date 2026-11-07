@@ -78,6 +78,7 @@ def main():
     p.add_argument('--config', required=True)
     p.add_argument('--source', required=True)
     p.add_argument('--output', required=True)
+    p.add_argument('--offline', action='store_true')
     args = p.parse_args()
     config = load_singing_config(args.config)
     started=time.monotonic();engine=validate_singing_config(config);timings={}
@@ -91,6 +92,10 @@ def main():
     import numpy as np
     import soundfile as sf
     import torch
+    if args.offline:
+        def reject_download(*args, **kwargs):
+            raise RuntimeError('rvc_offline_model_cache_missing')
+        torch.hub.download_url_to_file=reject_download
     import torchaudio
     import huggingface_hub
     import huggingface_hub.constants

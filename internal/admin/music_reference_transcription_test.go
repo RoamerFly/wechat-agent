@@ -72,15 +72,15 @@ func referenceTranscriptionFixture(t *testing.T) (*webFixture, *permittedTools, 
 }
 
 func referenceTranscriptResult(p *mediaTranscriptionPolicy) json.RawMessage {
-	raw, _ := json.Marshal(map[string]any{"ok": true, "text": "synthetic candidate lyrics", "status": "transcribed", "sources": []mediaAudioReference{p.ref}, "coverage": "provided_audio_only", "untrusted_external_content": true})
+	raw, _ := json.Marshal(map[string]any{"ok": true, "text": "synthetic candidate lyrics", "status": "transcribed", "sources": []mediaAudioReference{p.Reference()}, "coverage": "provided_audio_only", "untrusted_external_content": true})
 	return raw
 }
 
 func TestReferenceTranscriptionBindsSelectedAssetWindowAndExactWAV(t *testing.T) {
 	_, access, asset, wav, policy := referenceTranscriptionFixture(t)
 	sum := sha256.Sum256(wav)
-	if policy.receivedSharePolicy != nil || policy.ref.SHA != hex.EncodeToString(sum[:]) || policy.invocation().Account != access.trace.Account || policy.invocation().Thread != access.trace.Thread || policy.invocation().Requester != access.trace.Sender || policy.invocation().SourceVersions[access.trace.Source.EventID] != access.trace.Source.Revision || policy.invocation().SourceVersions["asset:"+asset.ID+":"+referenceTranscriptionAssetVersion(asset)] != 1 {
-		t.Fatal("reference origin lost its immutable source/audio binding", policy.invocation(), policy.ref)
+	if policy.receivedSharePolicy != nil || policy.Reference().SHA != hex.EncodeToString(sum[:]) || policy.invocation().Account != access.trace.Account || policy.invocation().Thread != access.trace.Thread || policy.invocation().Requester != access.trace.Sender || policy.invocation().SourceVersions[access.trace.Source.EventID] != access.trace.Source.Revision || policy.invocation().SourceVersions["asset:"+asset.ID+":"+referenceTranscriptionAssetVersion(asset)] != 1 {
+		t.Fatal("reference origin lost its immutable source/audio binding", policy.invocation(), policy.Reference())
 	}
 	for _, window := range [][2]int{{0, 2}, {1, 1}} {
 		other, err := access.newReferenceTranscriptionPolicy(t.Context(), asset, wav, window[0], window[1])
@@ -91,7 +91,7 @@ func TestReferenceTranscriptionBindsSelectedAssetWindowAndExactWAV(t *testing.T)
 	changed := append([]byte(nil), wav...)
 	changed[len(changed)-1] ^= 1
 	other, err := access.newReferenceTranscriptionPolicy(t.Context(), asset, changed, 1, 2)
-	if err != nil || other.ref.SHA == policy.ref.SHA || other.invocation().RequestKey == policy.invocation().RequestKey {
+	if err != nil || other.Reference().SHA == policy.Reference().SHA || other.invocation().RequestKey == policy.invocation().RequestKey {
 		t.Fatal("different WAV reused an audio reference or model job", err)
 	}
 	original := append([]byte(nil), wav...)
@@ -105,7 +105,7 @@ func TestReferenceTranscriptionBindsSelectedAssetWindowAndExactWAV(t *testing.T)
 		}
 		return json.RawMessage(`{"output":{"text":"synthetic candidate lyrics"}}`), nil
 	}
-	bad := bytes.Replace(transcriptionRequest(policy), []byte(policy.ref.SHA), []byte(strings.Repeat("f", 64)), 1)
+	bad := bytes.Replace(transcriptionRequest(policy), []byte(policy.Reference().SHA), []byte(strings.Repeat("f", 64)), 1)
 	if _, err = policy.Service(t.Context(), job, cap, "wechat/model_request", bad); err == nil || calls != 0 {
 		t.Fatal("substituted WAV reference reached provider", err, calls)
 	}
@@ -239,7 +239,7 @@ func TestReferenceTranscriptionUnknownProviderAttemptNeverRetries(t *testing.T) 
 			t.Fatal("uncertain reference ASR succeeded")
 		}
 	}
-	if calls != 1 || f.manager.billing.data.Purposes["plugin_media_transcription"].Requests != 1 || f.manager.billing.data.Purposes["plugin_media_transcription"].Reported != 0 {
+	if calls != 1 || f.manager.billing.PurposeTotals("plugin_media_transcription").Requests != 1 || f.manager.billing.PurposeTotals("plugin_media_transcription").Reported != 0 {
 		t.Fatal("uncertain ASR was replayed or usage called zero", calls)
 	}
 	if _, err := policy.Validate(t.Context(), job, cap, referenceTranscriptResult(policy)); err == nil {
@@ -252,7 +252,7 @@ func TestReferenceTranscriptionCompletedCheckpointCannotOutliveAuthority(t *test
 		t.Run(revoke, func(t *testing.T) {
 			f, access, asset, _, policy := referenceTranscriptionFixture(t)
 			job, cap := transcriptionJob(policy)
-			job.Arguments = policy.arguments
+			job.Arguments = policy.Arguments()
 			job, _, err := policy.store.CreateJob(t.Context(), job)
 			if err != nil {
 				t.Fatal(err)
@@ -271,11 +271,11 @@ func TestReferenceTranscriptionCompletedCheckpointCannotOutliveAuthority(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			policy.completedJob, err = policy.store.CompleteJobWithPrivate(t.Context(), job.ID, job.Revision, nil, verified.Result, verified.Private)
+			completed, err := policy.store.CompleteJobWithPrivate(t.Context(), job.ID, job.Revision, nil, verified.Result, verified.Private)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = policy.checkCompleted(t.Context()); err != nil {
+			if err = policy.Check(t.Context(), completed, pluginhost.Capability{}); err != nil {
 				t.Fatal("verified reference checkpoint was not initially usable", err)
 			}
 			switch revoke {
@@ -294,10 +294,10 @@ func TestReferenceTranscriptionCompletedCheckpointCannotOutliveAuthority(t *test
 			case "asset_replaced":
 				replaceReferenceAssetIndex(t, f.manager, asset.ID)
 			}
-			if err = policy.checkCompleted(t.Context()); err == nil {
+			if err = policy.Check(t.Context(), completed, pluginhost.Capability{}); err == nil {
 				t.Fatal("completed candidate remained actionable after authority changed", revoke)
 			}
-			if _, err = policy.store.PrivateJobResult(t.Context(), policy.completedJob, func(ctx context.Context, current pluginhost.Job) error { return policy.Check(ctx, current, cap) }); err == nil {
+			if _, err = policy.store.PrivateJobResult(t.Context(), completed, func(ctx context.Context, current pluginhost.Job) error { return policy.Check(ctx, current, cap) }); err == nil {
 				t.Fatal("revoked private candidate remained readable", revoke)
 			}
 			assertNoReferenceASRCandidates(t, f.dir)
@@ -414,7 +414,7 @@ func TestLiveReferenceTranscriptionCompletedCandidateRequiresCurrentAuthority(t 
 		return json.RawMessage(`{"output":{"text":"synthetic candidate lyrics"}}`), nil
 	}
 	text, err := policy.transcribe(t.Context())
-	if err != nil || text != "synthetic candidate lyrics" || calls != 1 || policy.completedJob.State != "completed" {
+	if err != nil || text != "synthetic candidate lyrics" || calls != 1 || policy.CompletedJob().State != "completed" {
 		t.Fatal("isolated selected-reference ASR failed", text, err, calls)
 	}
 	if err = policy.checkCompleted(t.Context()); err != nil {

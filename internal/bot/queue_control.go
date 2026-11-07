@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
@@ -30,10 +31,18 @@ func resumableVoiceChunks(d *mediaDelivery) bool {
 		return false
 	}
 	missing := false
-	for _, chunk := range d.Status.VoiceChunks {
+	chunks := append([]linuxnative.VoiceChunkStatus(nil), d.Status.VoiceChunks...)
+	sort.Slice(chunks, func(i, j int) bool { return chunks[i].Index < chunks[j].Index })
+	if chunks[0].Index < 0 || chunks[0].Index > 1 {
+		return false
+	}
+	for i, chunk := range chunks {
+		if i > 0 && chunk.Index != chunks[i-1].Index+1 {
+			return false
+		}
 		switch chunk.State {
 		case "accepted":
-			if !chunk.HasReceipt || chunk.ServerID == "" {
+			if missing || !chunk.HasReceipt || chunk.ServerID == "" {
 				return false
 			}
 		case "cancelled", "prepared":
@@ -59,7 +68,7 @@ func (w *Worker) resumeMissingMedia(ctx context.Context, in companion.Input, old
 	if !ok {
 		return nil, "native_resume_missing_not_supported"
 	}
-	if !old.UserCancelled || !resumableVoiceChunks(old) {
+	if !old.UserCancelled || old.Kind != "voice" || old.ID == "" {
 		return nil, "media_resume_missing_requires_verified_terminal_chunks"
 	}
 	// The original send authorization is not a perpetual capability.  Recheck
@@ -72,31 +81,63 @@ func (w *Worker) resumeMissingMedia(ctx context.Context, in companion.Input, old
 		return nil, "media_resume_missing_source_invalid"
 	}
 	if existing := w.resumedMediaExists(old); existing != nil {
+		if existing.ID == "" && !existing.terminal() {
+			return existing, "media_resume_receipt_pending"
+		}
 		return existing, ""
 	}
-	key := "media-resume-" + messageHash(old.Key + "|" + in.TraceID)[:48]
-	resumeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	status, err := n.ResumeMissingMediaJob(resumeCtx, old.ID, key)
-	cancel()
+	if w.beforeSubmit(ctx) != nil {
+		return nil, "media_resume_connection_paused"
+	}
+	if len(w.runtime.Media) >= 1000 {
+		return nil, "media_resume_queue_full"
+	}
+	reader, ok := w.sender.(interface {
+		ToolSendStatus(context.Context, string) (linuxnative.ToolStatus, error)
+	})
+	if !ok {
+		return nil, "native_resume_status_not_supported"
+	}
+	readCtx, stop := context.WithTimeout(ctx, 8*time.Second)
+	current, err := reader.ToolSendStatus(readCtx, old.ID)
+	stop()
 	if err != nil {
-		return nil, "native_resume_missing_failed"
+		return nil, "media_resume_original_receipt_unavailable"
 	}
-	if status.ID == "" || status.ThreadID != old.Input.Thread || status.SourceID != "" && status.SourceID != old.SourceID {
-		return nil, "native_resume_missing_identity_mismatch"
+	if !old.matchesNative(current) {
+		return nil, "media_resume_original_identity_mismatch"
 	}
+	old.Status = current.WithVoiceReceipts()
+	if old.Status.State == "accepted" {
+		return nil, "media_resume_already_accepted"
+	}
+	if old.Status.State != "cancelled" || !resumableVoiceChunks(old) {
+		return nil, "media_resume_missing_requires_verified_terminal_chunks"
+	}
+	key := "media-resume-" + messageHash(old.Key + "|" + in.TraceID)[:48]
 	next := *old
 	next.Key, next.ResumedFrom, next.Trace = key, old.Key, in.TraceID
+	next.ResumeOriginID = old.ID
 	next.Input = old.Input
 	next.Input.TraceID, next.Input.OriginTraceID = in.TraceID, old.Trace
-	next.ID, next.Status, next.Phase = status.ID, status.WithVoiceReceipts(), status.Phase
-	next.State, next.Reason, next.UserCancelled = status.State, "media_resume_missing_requested", false
+	next.ID, next.Status, next.Phase = "", linuxnative.ToolStatus{}, ""
+	next.State, next.Reason, next.UserCancelled = "resume_prepared", "media_resume_missing_requested", false
+	next.Paused = false
+	// The original script describes the whole source, not the resumed suffix.
+	// Preserve lineage, but do not claim that the new task spoke it all again.
+	next.SynthesisText, next.SynthesisTextKnown, next.DurationMS = "", false, 0
 	next.CancelTrace, next.CancelSender, next.CancelledAt, next.StateVersion = "", "", time.Time{}, 0
 	next.Created, next.CompletedAt, next.NotBefore, next.Next = time.Now().UTC(), time.Time{}, time.Time{}, time.Now()
 	next.Retries, next.Checks, next.Signature = 0, 0, ""
+	w.runtime.Version = 2
 	w.runtime.Media = append(w.runtime.Media, &next)
-	w.mediaRecord(&next, "media_resume_missing_queued", "decision")
+	w.persistErr = w.saveRuntime()
+	if w.persistErr != nil {
+		return &next, "media_resume_checkpoint_failed"
+	}
+	reason := w.submitMissingMedia(ctx, n, &next)
 	w.refreshMediaParent(next.Trace)
-	return &next, ""
+	return &next, reason
 }
 
 func (w *Worker) controlQueue(ctx context.Context, in companion.Input, owner bool, raw json.RawMessage) (string, error) {
@@ -154,6 +195,13 @@ func (w *Worker) controlQueue(ctx context.Context, in companion.Input, owner boo
 					}
 				}
 			case "resume":
+				if d.ResumedFrom != "" && d.ID == "" {
+					d.Paused, d.Next = false, time.Now()
+					if d.State != "resume_prepared" {
+						d.State, d.Reason = "checking_receipt", "media_resume_receipt_pending"
+					}
+					break
+				}
 				if d.ID != "" {
 					status, err := n.ToolSendStatus(ctx, d.ID)
 					if err != nil {
@@ -196,6 +244,7 @@ func (w *Worker) controlQueue(ctx context.Context, in companion.Input, owner boo
 		row := map[string]any{"trace_id": d.Trace, "job_id": d.ID, "kind": d.Kind, "title": d.Title, "state": d.State, "paused": d.Paused, "cancelled": d.UserCancelled, "accepted_parts": acceptedParts, "total_parts": totalParts, "resume_error": resumeError}
 		if resumed != nil {
 			row["resumed_trace_id"], row["resumed_job_id"] = resumed.Trace, resumed.ID
+			row["resumed_key"], row["resumed_state"] = resumed.Key, resumed.State
 		}
 		rows = append(rows, row)
 	}

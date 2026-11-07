@@ -36,7 +36,7 @@
 
 ## 依赖与验证边界
 
-SQLite 驱动固定为 `modernc.org/sqlite v1.38.2`，使用现有 Go 1.25 工具链，无 CGO。驱动 BSD-3-Clause 许可证和传递依赖各自许可证随 Go 模块版本固定；SQLite 本体为公有领域。无需独立数据库服务或本地嵌入模型运行时。
+SQLite 驱动固定为 `modernc.org/sqlite v1.38.2`，使用主程序的 Go 工具链，无 CGO。驱动 BSD-3-Clause 许可证和传递依赖各自许可证随 Go 模块版本固定；SQLite 本体为公有领域。无需独立数据库服务或本地嵌入模型运行时。
 
 合成回归、来源 Top-5、性能、Token 估算与隔离真实模型证据见 [验收记录](memory-acceptance.md)。嵌入适配器通过不代表未配置的真实语义服务已经验收。
 

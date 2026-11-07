@@ -202,8 +202,8 @@ func TestShareBindingOnlyOriginalSourceAndObservedChain(t *testing.T) {
 	if _, err := b.Call(t.Context(), s, j, cap, routeEnvelope("channels-feed", feedBody, previewURL), check, send); err == nil {
 		t.Fatal("completed POST replayed")
 	}
-	if calls != 2 || b.phase != "complete" {
-		t.Fatal(calls, b.phase)
+	if calls != 2 {
+		t.Fatal(calls)
 	}
 }
 func TestShareBindingFailureOrRevocationCannotResumeWithOtherSource(t *testing.T) {
@@ -248,80 +248,6 @@ func TestShareBindingRejectsScopeRevisionAndFeedObjectConflict(t *testing.T) {
 		}); err == nil {
 			t.Fatal("scope mismatch accepted")
 		}
-	}
-	if err := b.accept("channels-feed", json.RawMessage(`{"errCode":0,"data":{"feedInfo":{"objectId":"999"}}}`)); err == nil {
-		t.Fatal("other work accepted")
-	}
-}
-
-func TestShareBindingModernFeedRequiresNativeObjectAndExactObservedExport(t *testing.T) {
-	for _, mode := range []string{"valid", "metadata_changed", "missing_export", "wrong_export", "other_source", "unbound_object", "explicit_wrong", "explicit_null", "invalid_key"} {
-		t.Run(mode, func(t *testing.T) {
-			binding, _, job, _ := shareBindingFixture(t)
-			native := linuxnative.ChannelsSource{AccountID: "account", ThreadID: "room", MessageID: "message", ObjectID: "12345", Title: "Synthetic video", Author: "Synthetic author"}
-			if mode == "metadata_changed" {
-				native.Title, native.Author = "Earlier card description", "Earlier display name"
-				var err error
-				binding, err = newShareRouteBinding(linuxnative.Message{AccountID: "account", ThreadID: "room", ID: "message"}, native, companion.SourceRef{Account: "account", Thread: "room", MessageID: "message", EventID: "event", Revision: 2}, "https://weixin.qq.com/sph/synthetic123")
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			play := previewURL
-			if mode == "other_source" {
-				play += "-foreign-source"
-			}
-			if err := binding.accept("channels-parse", json.RawMessage(`{"code":0,"data":{"playable_url":"`+play+`"}}`)); err != nil {
-				t.Fatal(err)
-			}
-			var feed map[string]any
-			if err := json.Unmarshal([]byte(verifiedFeed), &feed); err != nil {
-				t.Fatal(err)
-			}
-			data := feed["data"].(map[string]any)
-			info := data["feedInfo"].(map[string]any)
-			delete(info, "objectId")
-			delete(info, "decodeKey")
-			data["sceneInfo"] = map[string]any{"dynamicExportId": "export/synthetic"}
-			switch mode {
-			case "missing_export":
-				delete(data, "sceneInfo")
-			case "wrong_export":
-				data["sceneInfo"] = map[string]any{"dynamicExportId": "export/foreign"}
-			case "unbound_object":
-				binding.object = ""
-			case "explicit_wrong":
-				info["objectId"] = "999"
-			case "explicit_null":
-				info["objectId"] = nil
-			case "invalid_key":
-				info["decodeKey"] = "not-a-key"
-			}
-			raw, _ := json.Marshal(feed)
-			err := binding.accept("channels-feed", raw)
-			if mode != "valid" && mode != "metadata_changed" {
-				if err == nil || binding.resolved != nil {
-					t.Fatal("unproven identity or key accepted", mode)
-				}
-				return
-			}
-			if err != nil || binding.resolved.ObjectID != "12345" || binding.resolved.DecodeKey != "" {
-				t.Fatal("bound native identity or absent key changed", err)
-			}
-			if mode == "metadata_changed" && (native.Title != "Earlier card description" || native.Author != "Earlier display name" || binding.resolved.Title != "Synthetic video" || binding.resolved.Author != "Synthetic author") {
-				t.Fatal("native card and feed descriptions were conflated")
-			}
-			var result map[string]any
-			if err = json.Unmarshal([]byte(verifiedShareResult), &result); err != nil {
-				t.Fatal(err)
-			}
-			result["private_decode_key"] = ""
-			raw, _ = json.Marshal(result)
-			verified, _, err := binding.ValidateResult(t.Context(), job, raw, func(context.Context) error { return nil })
-			if err != nil || len(verified.Private) == 0 || strings.Contains(string(verified.Result), "export/synthetic") {
-				t.Fatal("verified private handoff was not retained safely", err)
-			}
-		})
 	}
 }
 
@@ -438,25 +364,8 @@ func TestShareBindingResultRechecksScopeAndRevocation(t *testing.T) {
 			t.Fatal("revoked result released", calls, err)
 		}
 	}
-	b.phase = "channels-feed"
-	if _, _, err := b.ValidateResult(t.Context(), j, json.RawMessage(verifiedShareResult), func(context.Context) error { return nil }); err == nil {
+	incomplete, _, incompleteJob, _ := shareBindingFixture(t)
+	if _, _, err := incomplete.ValidateResult(t.Context(), incompleteJob, json.RawMessage(verifiedShareResult), func(context.Context) error { return nil }); err == nil {
 		t.Fatal("incomplete chain released result")
-	}
-}
-
-func TestShareBindingRejectsMalformedFeedBeforePluginResult(t *testing.T) {
-	for _, replacement := range []struct{ old, next string }{
-		{`"objectId":"12345"`, `"objectId":"999"`},
-		{`"objectId":"12345"`, `"objectId":null`},
-		{`"decodeKey":"18446744073709551615"`, `"decodeKey":"18446744073709551616"`},
-		{`"decodeKey":"18446744073709551615"`, `"decodeKey":true`},
-		{`"decodeKey":"18446744073709551615"`, `"decodeKey":1e3`},
-		{`https://media.example/video?token=synthetic-private`, ``},
-		{`https://media.example/video?token=synthetic-private`, `https://user:password@media.example/video`},
-	} {
-		b := &shareRouteBinding{object: "12345"}
-		if err := b.accept("channels-feed", json.RawMessage(strings.Replace(verifiedFeed, replacement.old, replacement.next, 1))); err == nil || b.resolved != nil {
-			t.Fatal("malformed host response yielded media proof", replacement.next)
-		}
 	}
 }

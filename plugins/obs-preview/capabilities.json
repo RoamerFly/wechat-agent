@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "obs.preview",
+      "implementation": "ready",
+      "description": "供主人管理页开启、刷新或停止本机 OBS 当前节目场景的 JPEG 预览。仅接受已经启用且由主人配置的 127.0.0.1 OBS WebSocket v5；不会启动 OBS、修改场景、开播、停止推流或操作进程。预览空闲 60 秒后自动停止。本阶段不向 Agent 或模型开放。",
+      "permissions": ["network"],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["start", "frame", "stop"]
+          }
+        },
+        "required": ["action"],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "discoverable": false,
+      "async": false,
+      "side_effect": "read"
+    }
+  ]
+}

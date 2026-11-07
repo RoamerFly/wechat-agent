@@ -3,6 +3,8 @@ package devicespec
 import (
 	"context"
 	"errors"
+
+	"wechat-bot/internal/identity"
 )
 
 // Repository stores only the durable device settings and task records. Media
@@ -43,7 +45,7 @@ func ValidateRepositorySnapshot(snapshot RepositorySnapshot) error {
 	}
 	requestHashes := make(map[string]string, len(snapshot.Tasks))
 	for id, task := range snapshot.Tasks {
-		if id != task.ID || !idPattern.MatchString(id) || task.RequestHash == "" {
+		if id != task.ID || !identity.ValidLegacyDeviceID(id) || task.RequestHash == "" {
 			return errors.New("device_migration_required")
 		}
 		if other, exists := requestHashes[task.RequestHash]; exists && other != id {

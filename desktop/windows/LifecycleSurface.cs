@@ -6,53 +6,63 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace WechatAgent.Desktop {
-    // Animate this small buffered surface only; never animate Form.Opacity or
-    // recreate the native host window to produce an entrance/exit effect.
     internal sealed class LifecycleSurface : Control {
-        readonly Timer frames = new Timer { Interval=16 };
+        readonly Timer frames = new Timer { Interval = 33 };
         readonly Stopwatch clock = new Stopwatch();
-        string heading="正在启动", detail="正在准备本机服务…";
-        bool running=true, completed;
-        [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action,uint parameter,out bool enabled,uint flags);
+        readonly Image emblem;
+        string heading = "欢迎回家", detail = "正在准备大肥鱼的工作台…";
+        bool running = true, completed;
+        [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint parameter, out bool enabled, uint flags);
         readonly bool motion;
         internal bool Animations { get { return motion; } }
         internal LifecycleSurface() {
-            DoubleBuffered=true; BackColor=Color.FromArgb(11,16,24);
-            bool enabled;motion=!SystemParametersInfo(0x1042,0,out enabled,0)||enabled;
-            // Repaint only the small progress ring. The full WebView-sized
-            // background and text do not need to be redrawn at animation rate.
-            frames.Tick+=delegate {
-                float scale=Math.Min(DeviceDpi/96f,Math.Min(Width/160f,Height/200f));
-                int x=Width/2,y=(int)((Height-190*scale)/2+32*scale),r=(int)Math.Ceiling(34*scale);
-                Invalidate(new Rectangle(x-r,y-r,2*r+1,2*r+1));
-            };
-            VisibleChanged+=delegate { if(Visible&&running&&motion){clock.Start();frames.Start();}else frames.Stop(); };
-        }
-        internal void State(string title,string message,bool active=true,bool done=false) {
-            heading=title;detail=message;running=active;completed=done;
-            if(Visible&&running&&motion){clock.Start();frames.Start();}else frames.Stop();
-            Invalidate();
-        }
-        internal void Detail(string message) { detail=message;Invalidate(); }
-        protected override void OnPaint(PaintEventArgs e) {
-            base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;
-            // Reserve room for the full ring, its rounded stroke and both text
-            // lines at every DPI; never place the centre relative to the bottom.
-            float dpi=g.DpiX/96f;
-            float scale=Math.Min(dpi,Math.Min(Width/160f,Height/200f));
-            int x=Width/2,y=(int)((Height-190*scale)/2+32*scale);
-            float radius=28*scale;
-            using(var track=new Pen(Color.FromArgb(41,55,77),4*scale))g.DrawEllipse(track,x-radius,y-radius,2*radius,2*radius);
-            using(var stroke=new Pen(completed?Color.FromArgb(24,132,91):Color.FromArgb(35,105,215),4*scale)) {
-                stroke.StartCap=stroke.EndCap=LineCap.Round;
-                if(completed)g.DrawLines(stroke,new[]{new PointF(x-11*scale,y),new PointF(x-3*scale,y+8*scale),new PointF(x+13*scale,y-10*scale)});
-                else g.DrawArc(stroke,x-radius,y-radius,2*radius,2*radius,motion?(float)(clock.Elapsed.TotalMilliseconds*.24%360):-90,running?100:300);
+            DoubleBuffered = true;
+            BackColor = Color.FromArgb(239, 243, 255);
+            bool enabled;
+            motion = !SystemParametersInfo(0x1042, 0, out enabled, 0) || enabled;
+            using (var stream = typeof(LifecycleSurface).Assembly.GetManifestResourceStream("AgentHomeStation.Icon.png")) {
+                if (stream != null) using (var original = Image.FromStream(stream)) emblem = new Bitmap(original);
             }
-            using(var title=new Font(Font.FontFamily,17*scale/dpi,FontStyle.Bold))
-                TextRenderer.DrawText(g,heading,title,new Rectangle(12,y+(int)(44*scale),Math.Max(0,Width-24),(int)(36*scale)),Color.FromArgb(231,237,247),TextFormatFlags.HorizontalCenter|TextFormatFlags.EndEllipsis);
-            using(var body=new Font(Font.FontFamily,Font.Size*scale/dpi))
-                TextRenderer.DrawText(g,detail,body,new Rectangle(24,y+(int)(86*scale),Math.Max(0,Width-48),Math.Max(1,Height-y-(int)(86*scale))),Color.FromArgb(156,172,195),TextFormatFlags.HorizontalCenter|TextFormatFlags.WordBreak);
+            frames.Tick += delegate {
+                float scale = LayoutScale();
+                Invalidate(new Rectangle((int)(Width / 2f - 70 * scale), (int)(Height / 2f + 60 * scale), (int)(140 * scale), (int)(14 * scale)));
+            };
+            VisibleChanged += delegate { UpdateAnimation(); };
         }
-        protected override void Dispose(bool disposing) { if(disposing)frames.Dispose();base.Dispose(disposing); }
+        float LayoutScale() { return Math.Min(DeviceDpi / 96f, Math.Min(Width / 300f, Height / 270f)); }
+        void UpdateAnimation() {
+            if (Visible && running && motion) { clock.Start(); frames.Start(); }
+            else frames.Stop();
+        }
+        internal void State(string title, string message, bool active = true, bool done = false) {
+            heading = title; detail = message; running = active; completed = done;
+            UpdateAnimation(); Invalidate();
+        }
+        internal void Detail(string message) { detail = message; Invalidate(); }
+        protected override void OnPaint(PaintEventArgs e) {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            float scale = LayoutScale(), dpi = g.DpiX / 96f;
+            float x = Width / 2f, y = Height / 2f;
+            using (var glow = new LinearGradientBrush(ClientRectangle, Color.FromArgb(239, 243, 255), Color.FromArgb(232, 228, 248), 45f)) g.FillRectangle(glow, ClientRectangle);
+            if (emblem != null) g.DrawImage(emblem, x - 44 * scale, y - 104 * scale, 88 * scale, 88 * scale);
+            using (var title = new Font(Font.FontFamily, 20 * scale / dpi, FontStyle.Bold))
+                TextRenderer.DrawText(g, heading, title, new Rectangle(12, (int)(y - 4 * scale), Math.Max(0, Width - 24), (int)(40 * scale)), Color.FromArgb(35, 43, 81), TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);
+            using (var body = new Font(Font.FontFamily, 10 * scale / dpi))
+                TextRenderer.DrawText(g, detail, body, new Rectangle(18, (int)(y + 84 * scale), Math.Max(0, Width - 36), Math.Max(1, Height - (int)(y + 84 * scale) - 12)), Color.FromArgb(99, 107, 140), TextFormatFlags.HorizontalCenter | TextFormatFlags.WordBreak);
+            // This is a waiting pulse, not a fabricated percentage of startup.
+            for (int i = 0; i < 3; i++) {
+                double phase = clock.Elapsed.TotalSeconds * 3.2 - i * .7;
+                int alpha = completed ? 230 : !running || !motion ? 170 : (int)(100 + 130 * (.5 + .5 * Math.Sin(phase)));
+                using (var brush = new SolidBrush(Color.FromArgb(alpha, completed ? Color.FromArgb(41, 127, 104) : Color.FromArgb(101, 87, 192))))
+                    g.FillEllipse(brush, x + (i - 1) * 18 * scale - 3 * scale, y + 63 * scale, 6 * scale, 6 * scale);
+            }
+        }
+        protected override void Dispose(bool disposing) {
+            if (disposing) { frames.Dispose(); if (emblem != null) emblem.Dispose(); }
+            base.Dispose(disposing);
+        }
     }
 }

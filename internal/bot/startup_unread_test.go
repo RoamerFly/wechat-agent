@@ -109,6 +109,11 @@ func TestStartupUnreadGroupsAcrossPagesSpeakersAndPreservesTimes(t *testing.T) {
 	if len(scope.Messages) != 104 {
 		t.Fatal("original messages duplicated/replaced with synthetic summary", len(scope.Messages))
 	}
+	for i, turn := range scope.Messages {
+		if turn.Source == nil || turn.Source.Sequence != int64(i+1) || turn.Source.MessageID != turn.TraceID {
+			t.Fatal("offline message lost its own native cursor", turn.TraceID, turn.Source)
+		}
+	}
 	for _, item := range w.runtime.Inbox {
 		if item.Phase != "silent" {
 			t.Fatal("child message not settled", item.Phase)

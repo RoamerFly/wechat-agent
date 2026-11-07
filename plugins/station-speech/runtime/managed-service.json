@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "service": "station-speech",
+  "protocol": "station-speech-host",
+  "protocol_version": 1,
+  "ownership": "host-managed-local-direct",
+  "operations": {"health": "health", "voices": "list_voices", "synthesize": "synthesize_wait", "status": "job_status", "artifact": "verified_artifact"},
+  "constraints": {"backend": "administrator-registered local speech backend only", "voice": "host-authorized private voice profile only", "output": "host-verified artifact only", "delivery": "host-owned; not part of this tool"},
+  "execution": "This descriptor is declarative. Only the station host may start the approved local speech adapter or create jobs; synthesis waits in the original turn after durable request and cancellation checks. Generic MCP execution must not execute this file."
+}

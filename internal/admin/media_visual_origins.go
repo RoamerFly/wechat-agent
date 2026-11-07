@@ -39,23 +39,24 @@ func (m *Manager) newBoundMediaVisualObservationPolicy(ctx context.Context, imag
 	if err != nil {
 		return nil, err
 	}
-	policy, err := m.newMediaVisualPolicyForOrigin(ctx, store, revision, prompt, images, maxTokens)
+	policy, err := newLegacyVisualPolicy(ctx, store, revision, prompt, images, maxTokens)
 	if err != nil {
 		return nil, err
 	}
 	// Caller-owned source maps must not be able to mutate an approved origin.
 	raw, err := json.Marshal(inv)
-	if err != nil || json.Unmarshal(raw, &policy.invocationValue) != nil {
+	var frozen pluginhost.Invocation
+	if err != nil || json.Unmarshal(raw, &frozen) != nil {
 		return nil, errors.New("media_visual_origin_required")
 	}
-	policy.invocationValue.RequestKey = "bound-media-visual-" + agentID(inv.RequestKey, string(policy.arguments), strconv.Itoa(policy.configRevision))
+	frozen.RequestKey = "bound-media-visual-" + agentID(inv.RequestKey, string(policy.Arguments()), strconv.Itoa(policy.ConfigRevision()))
 	account := inv.Account
-	policy.originCheck = func(ctx context.Context, _ pluginhost.Job, _ pluginhost.Capability) error {
+	m.bindVisualPolicy(policy, func() pluginhost.Invocation { return frozen }, func(ctx context.Context, _ pluginhost.Job, _ pluginhost.Capability) error {
 		if m.native.Account() != account {
 			return errors.New("media_visual_origin_changed")
 		}
 		return check(ctx)
-	}
+	})
 	return policy, nil
 }
 

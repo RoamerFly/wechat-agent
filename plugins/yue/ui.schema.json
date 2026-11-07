@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "sections": [
+    {"id": "backend", "title": "本机后端", "component": "resources"},
+    {"id": "tasks", "title": "作曲任务", "component": "tasks"},
+    {"id": "diagnostics", "title": "运行状态", "component": "diagnostics"}
+  ]
+}

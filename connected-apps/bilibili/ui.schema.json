@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "public-observation",
+      "title": "公开资料读取",
+      "fields": [
+        "enabled",
+        "videos",
+        "comments_enabled",
+        "audio_enabled",
+        "browser_enabled",
+        "playback_enabled"
+      ],
+      "action": "owner-save-public-observation"
+    }
+  ]
+}

@@ -6,6 +6,8 @@
 
 - [多账号管理与重新扫码登录](guide/MULTI-ACCOUNT.md)
 - [目录与启动入口](guide/project-layout.md)
+- [Windows 独立家目录预览与启动](guide/local-home-preview.md)
+- [本地聊天的音频工坊](guide/audio-workshop.md)
 - [运行服务、Agent权限与可迁移性](guide/runtime-and-portability.md)
 
 - [能力和验收边界](guide/FEATURES.md)

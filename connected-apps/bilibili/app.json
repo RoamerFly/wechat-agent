@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "id": "bilibili",
+  "name": "哔哩哔哩",
+  "version": "0.9.0",
+  "host_protocol": 1,
+  "application_protocol": 1,
+  "host_compatibility": ">=0.1.0 <1.0.0",
+  "status": "ready",
+  "platforms": [
+    "windows-amd64"
+  ],
+  "runtime": {
+    "transport": "http-adapter",
+    "entrypoint": "adapter/entry.json"
+  },
+  "permissions": [
+    "network"
+  ],
+  "capability_ids": [
+    "observation.title",
+    "observation.body",
+    "observation.page-text",
+    "observation.playback",
+    "observation.comments",
+    "observation.audio",
+    "publication.video",
+    "publication.reconciliation",
+    "authorization.verify",
+    "authorization.oauth"
+  ],
+  "browser_routes": [
+    {
+      "capability": "observation.page-text",
+      "url_template": "https://www.bilibili.com/video/{bvid}/",
+      "owner_opt_in": "browser_enabled"
+    }
+  ],
+  "http_routes": [
+    {
+      "id": "public-video-metadata",
+      "endpoint": "https://api.bilibili.com/x/web-interface/view",
+      "capabilities": [
+        "observation.title",
+        "observation.body"
+      ]
+    },
+    {
+      "id": "public-video-playback",
+      "endpoint": "https://api.bilibili.com/x/player/playurl",
+      "capabilities": [
+        "observation.playback",
+        "observation.audio"
+      ]
+    },
+    {
+      "id": "public-video-comments",
+      "endpoint": "https://api.bilibili.com/x/v2/reply/main",
+      "capabilities": [
+        "observation.comments"
+      ]
+    },
+    {
+      "id": "publication-initialize",
+      "endpoint": "https://member.bilibili.com/arcopen/fn/archive/video/init",
+      "capabilities": [
+        "publication.video"
+      ]
+    },
+    {
+      "id": "publication-upload-part",
+      "endpoint": "https://openupos.bilivideo.com/video/v2/part/upload",
+      "capabilities": [
+        "publication.video"
+      ]
+    },
+    {
+      "id": "publication-complete",
+      "endpoint": "https://member.bilibili.com/arcopen/fn/archive/video/complete",
+      "capabilities": [
+        "publication.video"
+      ]
+    },
+    {
+      "id": "publication-submit",
+      "endpoint": "https://member.bilibili.com/arcopen/fn/archive/add-by-utoken",
+      "capabilities": [
+        "publication.video"
+      ]
+    },
+    {
+      "id": "publication-query",
+      "endpoint": "https://member.bilibili.com/arcopen/fn/archive/view",
+      "capabilities": [
+        "publication.video",
+        "publication.reconciliation"
+      ]
+    },
+    {
+      "id": "publication-candidates",
+      "endpoint": "https://member.bilibili.com/arcopen/fn/archive/viewlist",
+      "capabilities": [
+        "publication.reconciliation"
+      ]
+    },
+    {
+      "id": "publication-account-verify",
+      "endpoint": "https://member.bilibili.com/arcopen/fn/user/account/info",
+      "capabilities": [
+        "authorization.verify"
+      ]
+    },
+    {
+      "id": "publication-oauth-exchange",
+      "endpoint": "https://api.bilibili.com/x/account-oauth2/v1/token",
+      "capabilities": [
+        "authorization.oauth"
+      ]
+    },
+    {
+      "id": "publication-oauth-refresh",
+      "endpoint": "https://api.bilibili.com/x/account-oauth2/v1/refresh_token",
+      "capabilities": [
+        "authorization.oauth"
+      ]
+    }
+  ],
+  "files": {
+    "adapter/audio.go": "e12e121e5429c4d5ce05dea6d24c5157ccbbb37f49bdd716c698d76e45b17983",
+    "adapter/audio_test.go": "26fc48ff2101ba7052b04ee254201974db9ab82f5df7aa98c9a4fdc2b5ccb6be",
+    "adapter/comments.go": "a5cec8c47d813af444963cb64fe12a99ee1c3d10c8e1088fd8276c02feb27de6",
+    "adapter/comments_test.go": "b279c85bfd8ba534b4a3448f04b326b2508c40987c8e0ecbe6be4811b0cc2a10",
+    "adapter/entry.json": "7f7e5b8a490bef3982b87bc1412c9c5fe67de4ad1e8e2c5d0ac27b147f798909",
+    "adapter/open_account.go": "31fb6c98a0e6572e14146f70ab69473030c7dc2ce575ab538edcf44277ed424b",
+    "adapter/open_account_test.go": "2db309db0854c632fd43ac6e1de37d02e8ed9fbf4f5787295ea2b93744060b41",
+    "adapter/open_archive_list.go": "26f8466507e6b5f0c317a86120b2acb49ed4b17753042e6f183ad16ff24a9318",
+    "adapter/open_archive_list_test.go": "a3246a9705eff02bff12c208f9c66598736a6679949d6d3d02553c863aedc221",
+    "adapter/open_oauth.go": "d0fdf27beda0c5408994828a10ab8676a412da0883e4a66fc66305d3a37ed7e6",
+    "adapter/open_oauth_test.go": "7fa56a2f1c76ed7ab3d947619357d7101fb17e1f373d0d7c187024bfc0ee3dc1",
+    "adapter/open_publication.go": "593c50c664b0f219637c73e6bb73cfdf42886bd15ef18bddb8ca4cf9e642a0aa",
+    "adapter/open_publication_test.go": "d63fb696af9191230aeb72b2462feb8bf51b602107c54de27aa89dedb0020b31",
+    "adapter/open_upload.go": "fe72d3bc5049b70861bbd18a49b2c68f9054aa13940626ce5d042237e9043ce1",
+    "adapter/open_upload_test.go": "704d3becefefd3179acf7774bffae3690406dddf32c66d18a9aa250c6130086a",
+    "adapter/page_test.go": "1bf2e1575226eacf51ad8ceed033846b9e2e5ed77682337970c734d86d9f11da",
+    "adapter/playback_test.go": "20768b695c6935d2b40ad0c81467808ffaaa18f5b592bc1e263c235e500846b0",
+    "adapter/public.go": "5d2621d5fef85dd39ae2670a75956057c10ed0624875e7a63d3edc90234a0a1a",
+    "adapter/public_test.go": "481b07def1bf94b5ba9de8897e909eab6ff6044f977fb428b85b4ac9da70f725",
+    "adapter/publication_enrollment.go": "1ab4cc2f711001ad61d437372aa5bac801e86c0f7af5af9517565571a875432d",
+    "adapter/publication_enrollment_test.go": "80f359e83c9d4229473107fbe9375d1a7316b9c5796753f8fbff86aaf27e0bc4",
+    "adapter/publication_grant.go": "a4c64f480cbe717a94298345f6468350b6c0877afb7479d10f70dc6505c41f47",
+    "adapter/publication_grant_test.go": "4b7b027f1811580ac12b178cbf8fa9506698e2c456e8284b4d80076374c37cd6",
+    "adapter/publication_oauth.go": "11bf05345aeff3f3bf47f27c3220bb526384c5eb1251a5b41887d60607933ba0",
+    "adapter/publication_oauth_test.go": "4f46ac2d2fe8dae0b7f71a94a337c91cc95ffa9236bbc581070bc379569c89d4",
+    "adapter/publication_reconciliation.go": "c5f5e92bca98bea2cbe5535dbc6078a90609c193694da0fb239dfbcb6cd7e133",
+    "adapter/publication_reconciliation_test.go": "af82658f40c1c09ee3fa7ee2e5fe1605bf37ee092cd020b73f216c5a7993ac5b",
+    "adapter/publication_workflow.go": "aec1d89156552d3cd2177c034a0b833ad62a0fcf7917e98a6ea8dd1a4405bb89",
+    "adapter/publication_workflow_test.go": "25c75437133e02d846f03eec9ff00c67e7b851bcddb99505fdda58c88a278f62",
+    "capabilities.json": "8423df1a0fe9d255b7e04af5101e588b79e1848c9a2d50f83cfbc1e789c64630",
+    "CHANGELOG.md": "2cfada5da603f87fb6611258a902c78a4dcf66a1407978168ed4ce581ef8b7d7",
+    "config.schema.json": "0589e38914100cd9e5c47ea97c5081ae6644d6aae19a64fb88805cdd69b91949",
+    "MIGRATION.md": "2cf666b2a072bf68487218197cf414d2ae2e4570175ed0ca1e645a1b39319943",
+    "PERMISSIONS.md": "479befcfd1a1349aff607128b0a8ef6ecb7022782036a6d13742133260a17765",
+    "README.md": "5c895abe98b99da6145596d9b6a5043fe351e65027801e8d156e972ca5309193",
+    "ui.schema.json": "0dfd7ce73d6b49d5b75fc33d7211169ea5af92f96e80a816a1e23b9f4153e44e"
+  }
+}

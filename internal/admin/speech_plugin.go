@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
 	"wechat-bot/internal/mcptools"
@@ -297,7 +298,7 @@ func (p *speechPluginPolicy) Service(ctx context.Context, j pluginhost.Job, cap 
 		if p.admin != nil {
 			usage.Purpose = "plugin_speech_admin_test"
 		}
-		if p.hostManager().billing == nil || p.hostManager().billing.record(Config{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
+		if p.hostManager().billing == nil || p.hostManager().billing.Record(billing.ModelConfig{Provider: "bailian", BaseURL: strings.TrimSuffix(endpoint, "/api/v1/services/aigc/multimodal-generation/generation"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}, usage) != nil {
 			return nil, errors.New("speech_usage_record_failed")
 		}
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -24,7 +25,7 @@ func writeReadOnlyMigrationASRProfile(t *testing.T, manager *Manager, id string)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var manifest registeredLocalASRManifest
+		var manifest localasr.Manifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +40,7 @@ func writeReadOnlyMigrationASRProfile(t *testing.T, manager *Manager, id string)
 		}
 		sum := sha256.Sum256(raw)
 		profile.ResourceVersion = hex.EncodeToString(sum[:])
-		profile.Initializer = localASRInitializer{ProfileID: id, ResourceVersion: profile.ResourceVersion}
+		profile.Initializer = localasr.Initializer{ProfileID: id, ResourceVersion: profile.ResourceVersion}
 	}
 	assertMigrationStoreAbsent(t, manager)
 	return profile
@@ -94,7 +95,7 @@ func TestPluginMigrationRegisteredLocalASRCanApplyDisabledThenEnable(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			step := previewStep(t, preview, localASRPluginID)
+			step := previewStep(t, preview, localasr.PluginID)
 			if step.Status != "ready_for_administrator_review" || len(step.RequiredMissing) != 0 || step.ProposedEnabled || !step.EligibleToEnable || step.ProfileID != test.selected || string(step.update.Values["local_asr_profile_id"]) != strconv.Quote(test.selected) || preview.Accounts[0].SourceHashes["local_asr_profile_resource_version"] != profile.ResourceVersion {
 				t.Fatal("existing verified local registration did not unblock the reviewed plan", step, preview.Accounts[0].SourceHashes)
 			}
@@ -102,7 +103,7 @@ func TestPluginMigrationRegisteredLocalASRCanApplyDisabledThenEnable(t *testing.
 			if !reflect.DeepEqual(resources, migrationRegistrationSnapshot(t, profile.Public)) {
 				t.Fatal("preview changed public registration")
 			}
-			body := map[string]any{"account": "test", "plugin": localASRPluginID, "apply_source_hash": step.ApplySourceHash, "prepared_package_digest": step.Package.ExpectedDigest, "permissions": step.Permissions, "confirm": true}
+			body := map[string]any{"account": "test", "plugin": localasr.PluginID, "apply_source_hash": step.ApplySourceHash, "prepared_package_digest": step.Package.ExpectedDigest, "permissions": step.Permissions, "confirm": true}
 			if code, raw, _ := f.request("POST", "/api/plugin-migrations/apply", body, true, true); code != 201 {
 				t.Fatalf("actual registered local migration failed: %d %s", code, raw)
 			}
@@ -110,18 +111,18 @@ func TestPluginMigrationRegisteredLocalASRCanApplyDisabledThenEnable(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			installed, err := store.Installed(t.Context(), localASRPluginID)
+			installed, err := store.Installed(t.Context(), localasr.PluginID)
 			if err != nil || installed.Enabled {
 				t.Fatal("migration enabled its package", installed, err)
 			}
-			config, err := store.Configuration(t.Context(), localASRPluginID)
+			config, err := store.Configuration(t.Context(), localasr.PluginID)
 			if err != nil || string(config.Values["local_asr_profile_id"]) != strconv.Quote(test.selected) || string(config.Values["asr_backend"]) != `"local"` {
 				t.Fatal("migration lost local selection", config, err)
 			}
 			if f.manager.mediaTranscriptionConfigured(t.Context()) {
 				t.Fatal("disabled migration advertised active transcription")
 			}
-			installed, err = store.SetEnabled(t.Context(), localASRPluginID, installed.Revision, true)
+			installed, err = store.SetEnabled(t.Context(), localasr.PluginID, installed.Revision, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -130,7 +131,7 @@ func TestPluginMigrationRegisteredLocalASRCanApplyDisabledThenEnable(t *testing.
 			}
 			grant := pluginhost.Grant{Account: "test", Plugin: installed.Package.ID, Version: installed.Package.Version, Permissions: installed.Permissions}
 			metadata, err := f.manager.localASRPluginMetadata(t.Context(), installed.Package, grant)
-			var initializer localASRInitializer
+			var initializer localasr.Initializer
 			if err != nil || json.Unmarshal(metadata["local_asr"], &initializer) != nil || initializer != profile.Initializer {
 				t.Fatal("migrated profile and runtime metadata differ", initializer, profile.Initializer, err)
 			}
@@ -153,7 +154,7 @@ func TestPluginMigrationRegisteredLocalASRResourceChangesInvalidateApproval(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := previewStep(t, first, localASRPluginID)
+			before := previewStep(t, first, localasr.PluginID)
 			if before.Status != "ready_for_administrator_review" {
 				t.Fatal("fixture was not initially verified", before)
 			}
@@ -168,7 +169,7 @@ func TestPluginMigrationRegisteredLocalASRResourceChangesInvalidateApproval(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-				var manifest registeredLocalASRManifest
+				var manifest localasr.Manifest
 				if err = json.Unmarshal(raw, &manifest); err != nil {
 					t.Fatal(err)
 				}
@@ -187,7 +188,7 @@ func TestPluginMigrationRegisteredLocalASRResourceChangesInvalidateApproval(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			after := previewStep(t, second, localASRPluginID)
+			after := previewStep(t, second, localasr.PluginID)
 			if before.ApplySourceHash == after.ApplySourceHash || first.Accounts[0].SourceHashes["local_asr_profile_resource_version"] == second.Accounts[0].SourceHashes["local_asr_profile_resource_version"] {
 				t.Fatal("resource proof did not invalidate old approval", before, after)
 			}

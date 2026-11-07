@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "station-speech.voices",
+      "implementation": "ready",
+      "description": "列出当前主人获准使用的本机说话声线。后续合成必须选择返回的精确 voice_id；较小的 speed 数值表示更慢的语速，结果会返回实际使用的速度。不披露模型或样本路径。",
+      "permissions": ["artifact.write", "gpu"],
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "side_effect": "read"
+    },
+    {
+      "id": "station-speech.synthesize",
+      "implementation": "ready",
+      "description": "用指定的本机说话声线合成文本，核验后登记为可下载音频成品。不会自动发送。",
+      "permissions": ["artifact.write", "gpu"],
+      "input_schema": {"type": "object", "properties": {"voice_id": {"type": "string"}, "text": {"type": "string", "description": "UTF-8 文本最多 12000 字节；实际长度由宿主校验。"}, "speed": {"type": "number", "description": "必须落在所选声线返回的速度范围内。"}, "text_language": {"type": "string", "enum": ["auto", "all_zh", "all_en", "all_ja", "all_ko", "all_yue", "zh", "en", "ja", "ko", "yue", "zh_en", "ja_en", "ko_en", "yue_en", "auto_zh", "auto_en", "auto_ja", "auto_ko", "auto_yue"]}}, "required": ["voice_id", "text"], "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "async": false,
+      "side_effect": "artifact"
+    },
+    {
+      "id": "station-speech.job",
+      "implementation": "ready",
+      "description": "查询或取消已有的本机语音合成任务。查询只显示仍可由原请求来源核验的结果；取消不会重新合成或返回音频。",
+      "permissions": ["artifact.write", "gpu"],
+      "input_schema": {"type": "object", "properties": {"job_id": {"type": "string", "description": "宿主返回的本机语音任务编号。"}, "action": {"type": "string", "enum": ["status", "cancel"]}}, "required": ["job_id", "action"], "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "async": false,
+      "side_effect": "read"
+    }
+  ]
+}

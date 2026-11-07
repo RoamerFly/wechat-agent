@@ -123,7 +123,7 @@ func TestMusicPluginBindsSingleProviderAttemptAndPrivateProvenance(t *testing.T)
 	if err != nil || bytes.Contains(verified.Result, []byte("token=synthetic")) || !bytes.Contains(verified.Private, []byte("token=synthetic")) || !bytes.Contains(verified.Result, []byte(`"requested_model":"synthetic-music"`)) || !bytes.Contains(verified.Result, []byte(`"provider_model":"provider-music-revision"`)) || !bytes.Contains(verified.Result, []byte(`"artifact_verified":false`)) || !bytes.Contains(verified.Result, []byte(`"wechat_sends":0`)) {
 		t.Fatal("provider acceptance/provenance is not private and bounded", err, string(verified.Result), string(verified.Private))
 	}
-	u := f.manager.billing.data.Purposes["plugin_music_generation"]
+	u := f.manager.billing.PurposeTotals("plugin_music_generation")
 	if u.Requests != 1 || u.Reported != 1 || u.Input != 7 || u.Output != 3 {
 		t.Fatal("actual transport usage lost", u)
 	}
@@ -169,8 +169,8 @@ func TestMusicPluginUnknownAttemptUsageAndNoRetry(t *testing.T) {
 			t.Fatal("uncertain provider request succeeded")
 		}
 	}
-	if calls != 1 || f.manager.billing.data.Purposes["plugin_music_generation"].Requests != 1 || f.manager.billing.data.Purposes["plugin_music_generation"].Reported != 0 {
-		t.Fatal("unknown usage became zero/replayed", calls, f.manager.billing.data)
+	if calls != 1 || f.manager.billing.PurposeTotals("plugin_music_generation").Requests != 1 || f.manager.billing.PurposeTotals("plugin_music_generation").Reported != 0 {
+		t.Fatal("unknown usage became zero/replayed", calls, f.manager.billing.Totals())
 	}
 	if _, err := p.Validate(t.Context(), j, cap, musicPluginOutput("https://audio.example/a.mp3", "synthetic-music")); err == nil {
 		t.Fatal("transport failure created verified result")

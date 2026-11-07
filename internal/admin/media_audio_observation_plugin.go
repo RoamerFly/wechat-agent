@@ -246,7 +246,7 @@ func (p *mediaAudioObservationPolicy) Service(ctx context.Context, j pluginhost.
 		usage := deepseek.ReportedUsage(reply, time.Now().UTC())
 		usage.Model, usage.Purpose = p.model, "plugin_media_audio_observation"
 		config := Config{Provider: "openai-compatible", BaseURL: strings.TrimSuffix(endpoint, "/chat/completions"), Model: p.model, APIKey: strings.TrimPrefix(headers["Authorization"], "Bearer ")}
-		if p.manager.billing == nil || p.manager.billing.record(config, usage) != nil {
+		if p.manager.billing == nil || p.manager.billing.Record(modelForBilling(config), usage) != nil {
 			return nil, errors.New("media_audio_observation_usage_record_failed")
 		}
 		if err != nil {

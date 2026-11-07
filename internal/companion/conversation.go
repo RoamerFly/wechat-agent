@@ -198,7 +198,7 @@ func (e *Engine) reviewPendingScoped(ctx context.Context, in Input, sent, pendin
 		data["kind"] = "review_delivered_media_caption"
 		data["delivered_attachments"] = caption[0]
 	}
-	scope := e.Store.Context(in, e.Config, time.Now())
+	scope := e.conversationScope(in, e.Config, time.Now())
 	data["relationship_notes"] = map[string]any{"evidence_kind": "legacy_unverified_notes", "items": scope.Notes}
 	data["recent_conversation"] = e.contextTurns(scope, in)
 	if scope.Preferences != "" {
@@ -375,4 +375,6 @@ type ConversationEvent struct {
 	Text       string     `json:"text"`
 	At         string     `json:"at"`
 	NewRequest bool       `json:"new_request"`
+	// MediaReadFailed is a host observation status, never retained user text.
+	MediaReadFailed bool `json:"media_read_failed,omitempty"`
 }

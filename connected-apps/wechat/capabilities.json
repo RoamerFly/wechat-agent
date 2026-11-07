@@ -1,0 +1,278 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "events.read",
+      "implementation": "migration-pending",
+      "description": "events.read",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "messages.read",
+      "implementation": "migration-pending",
+      "description": "messages.read",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "members.read",
+      "implementation": "migration-pending",
+      "description": "当前授权群成员读取",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "contacts.read",
+      "implementation": "migration-pending",
+      "description": "独立 Windows 站点的本机主人通讯录查询及按连接授权的本地聊天读取",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "groups.list",
+      "implementation": "migration-pending",
+      "description": "groups.list",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "send.text",
+      "implementation": "migration-pending",
+      "description": "send.text",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "send.quoted_text",
+      "implementation": "migration-pending",
+      "description": "send.quoted_text",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "send.image",
+      "implementation": "migration-pending",
+      "description": "send.image",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "send.voice",
+      "implementation": "migration-pending",
+      "description": "send.voice",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "send.video",
+      "implementation": "migration-pending",
+      "description": "send.video",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "send.file",
+      "implementation": "migration-pending",
+      "description": "send.file",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.recall",
+      "implementation": "migration-pending",
+      "description": "account.recall",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.rename",
+      "implementation": "migration-pending",
+      "description": "account.rename",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.my_name",
+      "implementation": "migration-pending",
+      "description": "account.my_name",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.mute",
+      "implementation": "migration-pending",
+      "description": "account.mute",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.add_members",
+      "implementation": "migration-pending",
+      "description": "account.add_members",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.remove_members",
+      "implementation": "migration-pending",
+      "description": "account.remove_members",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.leave",
+      "implementation": "migration-pending",
+      "description": "account.leave",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.clear_announcement",
+      "implementation": "migration-pending",
+      "description": "account.clear_announcement",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "account.create",
+      "implementation": "migration-pending",
+      "description": "account.create",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "share.read",
+      "implementation": "migration-pending",
+      "description": "核验并读取原微信分享。已迁入兼容适配器，实际读取依赖宿主的分享读取和媒体能力；独立运行接入待迁移。",
+      "permissions": [],
+      "discoverable": false,
+      "input_schema": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      }
+    }
+  ]
+}

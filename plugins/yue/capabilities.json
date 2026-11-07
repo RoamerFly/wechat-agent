@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "yue.generate",
+      "implementation": "ready",
+      "description": "使用本机 YuE 原创或根据已登记的 PCM16 WAV 参考成品生成歌曲。返回原任务编号。参数遵循已安装模型节点的范围。指定声线用独立 RVC 工具。",
+      "permissions": ["artifact.read", "artifact.write", "gpu"],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "mode": {"type": "string", "enum": ["original", "cover"]},
+          "style": {"type": "string"},
+          "lyrics": {"type": "string"},
+          "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "min_duration_seconds": {"type": "number", "minimum": 0},
+          "text_guidance_scale": {"type": "number", "minimum": 0},
+          "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+          "vocal_gender": {"type": "string", "enum": ["female", "male"]},
+          "planning_mode": {"type": "string", "enum": ["off", "melody", "full", "reference"]},
+          "reference_mode": {"type": "string", "enum": ["melody", "full"]},
+          "sampling": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": ["number", "string"]}}},
+          "reference_artifact_id": {"type": "string"}
+        },
+        "required": ["mode", "style", "lyrics", "duration_seconds"],
+        "additionalProperties": false
+      },
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "async": true,
+      "side_effect": "artifact"
+    },
+    {
+      "id": "yue.job",
+      "implementation": "ready",
+      "description": "按原任务编号查询或取消 YuE。核验完成后返回作品编号，主人可从本地聊天下载 FLAC。",
+      "permissions": ["artifact.read", "artifact.write", "gpu"],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "job_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "action": {"type": "string", "enum": ["status", "cancel"]}
+        },
+        "required": ["job_id", "action"],
+        "additionalProperties": false
+      },
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "async": false,
+      "side_effect": "write"
+    }
+  ]
+}

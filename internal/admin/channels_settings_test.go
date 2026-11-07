@@ -114,7 +114,8 @@ func TestNativeChannelsIdentityDoesNotDependOnPreviewTitleLength(t *testing.T) {
 
 func TestChannelsResolverRefusesWrongScopeBeforeAnyLookup(t *testing.T) {
 	f := setup(t)
-	msg := linuxnative.Message{ID: "received-card", ThreadID: "filehelper", Direction: "incoming"}
+	kind := 51
+	msg := linuxnative.Message{ID: "received-card", ThreadID: "filehelper", Direction: "incoming", Type: 49, AppMessageType: &kind}
 	for _, source := range []linuxnative.ChannelsSource{
 		{AccountID: "another", ThreadID: msg.ThreadID, MessageID: msg.ID},
 		{AccountID: "test", ThreadID: "other@chatroom", MessageID: msg.ID},
@@ -128,7 +129,8 @@ func TestChannelsResolverRefusesWrongScopeBeforeAnyLookup(t *testing.T) {
 
 func TestChannelsResolverWithoutInstalledPluginNeverUsesLegacyNetworkResolver(t *testing.T) {
 	f := setup(t)
-	msg := linuxnative.Message{ID: "received-card", ThreadID: "filehelper", Direction: "incoming"}
+	kind := 51
+	msg := linuxnative.Message{ID: "received-card", ThreadID: "filehelper", Direction: "incoming", Type: 49, AppMessageType: &kind}
 	source := linuxnative.ChannelsSource{AccountID: "test", ThreadID: msg.ThreadID, MessageID: msg.ID, ObjectID: "synthetic-object"}
 	if _, err := f.manager.resolveReceivedChannels(context.Background(), msg, source); err == nil || err.Error() != "share_plugin_migration_required" {
 		t.Fatal("missing share-reader entered a legacy resolver path", err)

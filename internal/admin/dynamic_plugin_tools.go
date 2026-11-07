@@ -77,6 +77,11 @@ func builtInServicePlugin(id string) bool {
 // the individual adapter lists rather than p.List/localTools so service plugin
 // discovery cannot recurse back into itself.
 func (p *permittedTools) dedicatedPluginToolNames(ctx context.Context, id string) []string {
+	// Windows production retains the package's historical task records but must
+	// not advertise a legacy device action as an available Agent capability.
+	if id == mobileDevicePluginID && p != nil && p.manager != nil && p.manager.mobileRetired {
+		return nil
+	}
 	var tools []mcptools.Tool
 	switch id {
 	case "music":
@@ -120,6 +125,9 @@ func (p *permittedTools) dynamicPluginAllowed() bool {
 }
 
 func (p *permittedTools) dynamicPluginCapabilities(ctx context.Context, id string) ([]pluginhost.Capability, error) {
+	if id == mobileDevicePluginID && p != nil && p.manager != nil && p.manager.mobileRetired {
+		return nil, nil
+	}
 	if !p.dynamicPluginAllowed() || builtInServicePlugin(id) {
 		return nil, nil
 	}

@@ -32,7 +32,7 @@ def build(source, destination):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     root = Path(__file__).resolve().parents[1] / "desktop/windows/assets"
-    parser.add_argument("--source", type=Path, default=root / "agent-chat-plugins.png")
-    parser.add_argument("--output", type=Path, default=root / "agent-chat-plugins.ico")
+    parser.add_argument("--source", type=Path, default=root / "agent-home.png")
+    parser.add_argument("--output", type=Path, default=root / "agent-home.ico")
     args = parser.parse_args()
     build(args.source, args.output)

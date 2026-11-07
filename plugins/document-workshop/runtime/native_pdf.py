@@ -11,7 +11,7 @@ from pathlib import Path
 import zipfile
 from xml.etree import ElementTree as ET
 
-from document_logic import _verify_docx_container
+from document_logic import DocumentError, _docx_block_for_table, _verify_docx_container
 from reportlab_image import EmbeddedImageError, intrinsic_size, reportlab_reader
 
 WORD = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -126,12 +126,13 @@ def _blocks(docx: Path):
             else:
                 items.append(("heading" if style is not None and str(style.get("{%s}val" % WORD, "")).startswith("Heading") else "title" if style is not None and style.get("{%s}val" % WORD) == "Title" else "paragraph", _text(child), _font_size(child)))
         elif tag == "tbl":
-            rows = []
-            for row in child.findall("{%s}tr" % WORD):
-                rows.append([_text(cell) for cell in row.findall("{%s}tc" % WORD)])
-            if not rows or len(rows) > 200 or max(map(len, rows)) > 12:
+            try:
+                table = _docx_block_for_table(child)
+            except DocumentError as exc:
+                raise NativePDFError(str(exc)) from exc
+            if not table or len(table["rows"]) > 200 or max(map(len, table["rows"])) > 16:
                 raise NativePDFError("native_pdf_table_unsupported")
-            items.append(("table", rows))
+            items.append(("table", table["rows"], table.get("merges", []), table.get("borderless", False)))
         elif tag != "sectPr":
             raise NativePDFError("native_pdf_layout_unsupported")
     return items
@@ -182,9 +183,21 @@ def export_docx(docx: Path, pdf: Path, chinese_font: Path) -> dict:
                 style = api["ParagraphStyle"](kind + "Custom", parent=style, fontSize=requested_size, leading=max(requested_size * 1.45, style.leading))
             body.extend([api["Paragraph"](text.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>"), style), api["Spacer"](1, 4)])
         elif kind == "table":
-            data = [[api["Paragraph"](str(cell).replace("&", "&amp;").replace("<", "&lt;"), styles["paragraph"]) for cell in row] for row in values[0]]
-            table = api["Table"](data, repeatRows=1, hAlign="LEFT")
-            table.setStyle(api["TableStyle"]([("GRID", (0,0), (-1,-1), 0.5, api["colors"].HexColor("#B8B8B8")), ("BACKGROUND", (0,0), (-1,0), api["colors"].HexColor("#EAF0FA")), ("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("LEFTPADDING", (0,0), (-1,-1), 7), ("RIGHTPADDING", (0,0), (-1,-1), 7), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6)]))
+            rows, merges, borderless = values
+            data = [[api["Paragraph"](str(cell).replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>"), styles["paragraph"]) for cell in row] for row in rows]
+            repeat = 0 if any(m["row"] == 0 and m["row_span"] > 1 for m in merges) else 1
+            table = api["Table"](data, repeatRows=repeat, hAlign="LEFT")
+            spans = [("SPAN", (m["column"], m["row"]),
+                      (m["column"] + m["col_span"] - 1, m["row"] + m["row_span"] - 1)) for m in merges]
+            decoration = [] if borderless else [
+                ("GRID", (0,0), (-1,-1), 0.5, api["colors"].HexColor("#B8B8B8")),
+                ("BACKGROUND", (0,0), (-1,0), api["colors"].HexColor("#EAF0FA")),
+            ]
+            table.setStyle(api["TableStyle"](decoration + [
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                ("LEFTPADDING", (0,0), (-1,-1), 7), ("RIGHTPADDING", (0,0), (-1,-1), 7),
+                ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ] + spans))
             body.extend([api["KeepTogether"](table), api["Spacer"](1, 8)])
         elif kind == "image":
             target, raw = values

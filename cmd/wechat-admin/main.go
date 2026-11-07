@@ -67,7 +67,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	manager, err := admin.NewManager(dir, os.Getenv("WECHAT_BOT_STATE_DIR"), native)
+	manager, err := newManager(dir, os.Getenv("WECHAT_BOT_STATE_DIR"), native)
 	if err != nil {
 		return err
 	}

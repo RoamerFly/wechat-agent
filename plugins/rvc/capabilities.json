@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "rvc.convert",
+      "implementation": "ready",
+      "description": "将当前任务已授权的音频素材交由宿主管理的本机 RVC 服务异步换声。必须指定已经登记的声线版本；不会以默认或其他声线替代，也不会自行发送成品。",
+      "permissions": ["artifact.read", "artifact.write", "gpu"],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "artifact_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "voice_profile_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "title": {"type": "string", "maxLength": 120}
+        },
+        "required": ["artifact_id", "voice_profile_id"],
+        "additionalProperties": false
+      },
+      "output_schema": {"type": "object"},
+      "discoverable": true,
+      "async": true,
+      "side_effect": "artifact"
+    }
+  ]
+}

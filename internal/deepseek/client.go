@@ -44,7 +44,43 @@ type Client struct {
 	onUsage              func(Usage)
 }
 
+// CloseIdleConnections releases a short-lived caller's transport without
+// cancelling an already running request. Long-lived hosts may keep the client.
+func (c *Client) CloseIdleConnections() { c.http.CloseIdleConnections() }
+
 func New(config Config) (*Client, error) {
+	config, err := normalizeConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(config.KeyFile)
+	if err != nil {
+		return nil, errors.New("DeepSeek key file unavailable")
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 4097))
+	key := strings.TrimSpace(string(raw))
+	if err != nil || len(raw) > 4096 || !validAPIKey(key) {
+		return nil, errors.New("invalid DeepSeek key file")
+	}
+	return newConfiguredClient(config, key)
+}
+
+// NewWithAPIKey creates a client from an in-memory credential.  It is useful
+// to hosts that keep provider credentials in their own private configuration
+// rather than creating a temporary key file for each model client.
+func NewWithAPIKey(config Config, key string) (*Client, error) {
+	config, err := normalizeConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if !validAPIKey(key) {
+		return nil, errors.New("invalid DeepSeek API key")
+	}
+	return newConfiguredClient(config, key)
+}
+
+func normalizeConfig(config Config) (Config, error) {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.deepseek.com"
 	}
@@ -61,33 +97,37 @@ func New(config Config) (*Client, error) {
 		config.ToolMaxTokens = config.MaxTokens
 	}
 	if config.ToolMaxTokens < 64 || config.ToolMaxTokens > 393216 {
-		return nil, errors.New("invalid tool output limit")
+		return Config{}, errors.New("invalid tool output limit")
 	}
 	if len(config.SystemPrompt) > 16384 || !utf8.ValidString(config.SystemPrompt) || config.MaxTokens < 64 || config.MaxTokens > 393216 {
-		return nil, errors.New("invalid model role or output limit")
+		return Config{}, errors.New("invalid model role or output limit")
 	}
 	if config.ReasoningEffort == "" {
 		config.ReasoningEffort = "low"
 	}
 	if config.ReasoningEffort != "low" && config.ReasoningEffort != "high" && config.ReasoningEffort != "max" {
-		return nil, errors.New("invalid reasoning effort")
+		return Config{}, errors.New("invalid reasoning effort")
 	}
 	u, err := url.Parse(config.BaseURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("DeepSeek base URL must be HTTPS")
+		return Config{}, errors.New("DeepSeek base URL must be HTTPS")
 	}
 	if len(config.Model) > 128 || strings.ContainsAny(config.Model, "\r\n\x00") {
-		return nil, errors.New("invalid model")
+		return Config{}, errors.New("invalid model")
 	}
-	f, err := os.Open(config.KeyFile)
-	if err != nil {
-		return nil, errors.New("DeepSeek key file unavailable")
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, 4097))
-	key := strings.TrimSpace(string(raw))
-	if err != nil || len(raw) > 4096 || len(key) < 16 || !utf8.ValidString(key) || strings.ContainsAny(key, "\r\n\x00 ") {
-		return nil, errors.New("invalid DeepSeek key file")
+	return config, nil
+}
+
+func validAPIKey(key string) bool {
+	// Keep New's historical key-file acceptance boundary: whitespace around the
+	// value is trimmed before this check, while embedded tabs were accepted.
+	return len(key) >= 16 && len(key) <= 4096 && utf8.ValidString(key) && !strings.ContainsAny(key, "\r\n\x00 ")
+}
+
+func newConfiguredClient(config Config, key string) (*Client, error) {
+	u, err := url.Parse(config.BaseURL)
+	if err != nil { // normalizeConfig has already checked this; retain a safe guard.
+		return nil, errors.New("DeepSeek base URL must be HTTPS")
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
 	enabled := config.ThinkingEnabled != nil && *config.ThinkingEnabled

@@ -2,25 +2,23 @@ package admin
 
 import (
 	"strings"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/mcptools"
 )
 
-// WeChat transport is a built-in host capability, not an optional document,
-// voice or project plugin.  Keep its discovery in a separate group so an
-// unavailable processor never makes attachment receipt, prepared-media
-// delivery or receipt reconciliation disappear from the Agent's capability
-// view.  Definitions remain in agentTools to preserve one call dispatcher.
+// WeChat discovery belongs to the connected application. No optional project
+// service is enumerated while listing an application's communication tools.
 func (p *permittedTools) wechatCommunicationTools() []mcptools.Tool {
-	all := p.agentTools()
-	out := make([]mcptools.Tool, 0, len(all))
-	for _, tool := range all {
-		if strings.HasPrefix(tool.Name, "wechat_") {
-			out = append(out, tool)
-		}
+	if !p.agentToolsAllowed() {
+		return nil
 	}
-	return out
+	c := p.manager.agent.config()
+	return wechatapp.Tools(wechatapp.Policy{
+		Owner: p.privileged(), ReadConversations: c.ReadConversations && (!strings.HasSuffix(p.trace.Thread, "@chatroom") || p.manager.Config().Companion.Permissions.ObserveGroups),
+		CrossConversation: c.CrossConversation, AccountActions: c.AccountActions,
+	})
 }
 
 func workspaceAgentToolName(name string) bool {
-	return agentToolName(name) && !strings.HasPrefix(name, "wechat_")
+	return agentToolName(name) && !wechatapp.ToolName(name)
 }

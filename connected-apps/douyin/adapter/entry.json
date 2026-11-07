@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "kind": "station-official-douyin-app",
+  "host_entrypoint": "douyin-search",
+  "connection_authority": "host",
+  "web_read": {
+    "connection": "web-page-text",
+    "authentication": "host-owned-saved-web-login",
+    "content": "home",
+    "video_content_prefix": "web-video-",
+    "field": "page_text",
+    "owner_opt_in": "explicit-owner-web-read",
+    "expanded_scope_owner_opt_in": "web-scope-home-and-videos",
+    "scope_default": "home",
+    "scope_expanded": "home_and_videos",
+    "owner_settings_schema": "web-read.schema.json",
+    "audio": {
+      "field": "audio",
+      "owner_opt_in": "web-transcribe-audio",
+      "source": "host-verified-video-detail-media",
+      "decoder": "host-local-ffmpeg",
+      "recognizer": "owner-enabled-local-asr",
+      "default_seconds": 60,
+      "min_seconds": 1,
+      "max_seconds": 240,
+      "pagination": "host-owned-media-hash-and-audio-window",
+      "requires_playback": false
+    },
+    "visual": {
+      "field": "visual",
+      "owner_opt_in": "web-inspect-visual",
+      "source": "host-verified-video-detail-media",
+      "decoder": "host-local-ffmpeg",
+      "analyzer": "owner-enabled-media-understanding",
+      "default_frames": 6,
+      "min_frames": 1,
+      "max_frames": 12,
+      "pagination": "host-owned-media-hash-frame-index-and-pts",
+      "requires_playback": false
+    },
+    "playback": {
+      "field": "playback",
+      "owner_opt_in": "web-sample-playback",
+      "source": "host-verified-home-video-link-and-main-media",
+      "evidence": "html-media-played-ranges",
+      "default_seconds": 6,
+      "min_seconds": 1,
+      "max_seconds": 20
+    },
+    "pagination": "host-owned",
+    "profile": "host-owned",
+    "comments": {
+      "field": "comments",
+      "owner_opt_in": "web-read-comments",
+      "source": "host-verified-video-page-comment-cards",
+      "default_count": 20,
+      "pagination": "host-owned-video-and-comment-id",
+      "requires_playback": false
+    }
+  },
+  "web_interaction": {
+    "connection": "web-page-text",
+    "authentication": "host-owned-saved-web-login",
+    "owner_opt_in": {
+      "likes": "web-like-actions",
+      "replies": "web-reply-comments"
+    },
+    "kinds": [
+      "like",
+      "reply_comment"
+    ],
+    "task_ledger": "host-owned-application-job-and-manifest",
+    "comment_parent_proof": "host-issued-comment-source-version",
+    "submit": "prepare-and-grant-before-durable-submission",
+    "reconcile": "query-only-after-submission"
+  },
+  "web_publication": {
+    "connection": "web-page-text",
+    "authentication": "host-owned-saved-web-login",
+    "creator_center": "host-owned",
+    "owner_opt_in": "explicit-owner-web-publish",
+    "checkpoint": "host-owned-task-and-manifest",
+    "media": "host-verified-staged-artifact",
+    "reconcile": "query-only-after-submission"
+  },
+  "connection": "web-page-text",
+  "authentication": "host-owned-saved-web-login",
+  "observation_fields": [
+    "page_text",
+    "playback",
+    "audio",
+    "visual",
+    "comments"
+  ]
+}

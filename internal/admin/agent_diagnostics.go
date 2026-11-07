@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/mcptools"
 )
 
@@ -63,7 +64,7 @@ func (p *permittedTools) callDiagnostics(raw json.RawMessage) (string, error) {
 	}
 	backend, model, profile := "", "", ""
 	if store, err := p.manager.packageStore(); err == nil {
-		if config, err := store.Configuration(context.Background(), localASRPluginID); err == nil {
+		if config, err := store.Configuration(context.Background(), localasr.PluginID); err == nil {
 			_ = json.Unmarshal(config.Values["asr_backend"], &backend)
 			_ = json.Unmarshal(config.Values["asr_model"], &model)
 			_ = json.Unmarshal(config.Values["local_asr_profile_id"], &profile)
@@ -72,6 +73,6 @@ func (p *permittedTools) callDiagnostics(raw json.RawMessage) (string, error) {
 			}
 		}
 	}
-	b, e := json.Marshal(map[string]any{"account": p.trace.Account, "thread_id": in.Thread, "items": rows[in.Offset:end], "next_offset": end, "has_more": end < len(rows), "total": len(rows), "read_only": true, "asr_plugin": localASRPluginID, "asr_enabled": p.manager.mediaTranscriptionConfigured(context.Background()), "asr_model": model, "asr_backend": backend, "asr_local_model": profile})
+	b, e := json.Marshal(map[string]any{"account": p.trace.Account, "thread_id": in.Thread, "items": rows[in.Offset:end], "next_offset": end, "has_more": end < len(rows), "total": len(rows), "read_only": true, "asr_plugin": localasr.PluginID, "asr_enabled": p.manager.mediaTranscriptionConfigured(context.Background()), "asr_model": model, "asr_backend": backend, "asr_local_model": profile})
 	return string(b), e
 }

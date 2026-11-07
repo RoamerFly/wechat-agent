@@ -2,8 +2,6 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,16 +11,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
+	"wechat-bot/internal/apphttp"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/linuxnative"
 )
 
-type accountRecord struct {
-	ID       string `json:"id"`
-	Label    string `json:"label,omitempty"`
-	Removed  bool   `json:"removed,omitempty"`
-	Deleting bool   `json:"deleting,omitempty"`
-	Purged   bool   `json:"purged,omitempty"`
-}
+type accountRecord = wechatapp.LegacyAccountRecord
 type accountAccess struct {
 	mu      sync.RWMutex
 	removed bool
@@ -38,7 +34,7 @@ type accountRegistry struct {
 	lifecycle sync.Mutex
 	mu        sync.Mutex
 	root      *Server
-	fish      *fishIdentityRegistry
+	fish      *fishidentity.Registry
 	items     map[string]*accountRuntime
 	order     []accountRecord
 	closed    bool
@@ -48,15 +44,12 @@ type accountFactory interface {
 	Accounts(context.Context) ([]linuxnative.AccountInfo, error)
 }
 
-func accountDirectory(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return hex.EncodeToString(sum[:])
-}
+func accountDirectory(id string) string { return wechatapp.AccountDirectory(id) }
 
 func newAccountRegistry(root *Server) (*accountRegistry, error) {
 	fish := root.manager.fish
 	if fish == nil {
-		fish = newFishIdentityRegistry(root.manager.dir)
+		fish = fishidentity.New(root.manager.dir)
 		root.manager.fish = fish
 	}
 	a := &accountRegistry{root: root, fish: fish, items: map[string]*accountRuntime{}}
@@ -134,11 +127,11 @@ func (a *accountRegistry) open(record accountRecord, initialize bool) (*accountR
 			return nil, err
 		}
 	}
-	m, err := newManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native, a.fish)
+	m, err := newManager(dir, filepath.Join(a.root.manager.stateDir, "accounts", accountDirectory(record.ID)), native, a.fish, a.root.manager.mobileRetired, a.root.manager.deviceIO)
 	if err != nil {
 		return nil, err
 	}
-	h, err := newHandler(m, "", a.root.origin, a.root)
+	h, err := newHandler(m, a.root.auth, false)
 	if err != nil {
 		m.Close()
 		return nil, err
@@ -287,7 +280,7 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 	case "rename":
 		record.Label = in.Label
 	case "bind_fish":
-		fishID, err := a.fish.bind(id)
+		fishID, err := a.fish.Bind(id)
 		if err != nil {
 			fail(w, 500, err.Error())
 			return
@@ -295,7 +288,7 @@ func (a *accountRegistry) manage(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"id": id, "fish_id": fishID})
 		return
 	case "unbind_fish":
-		if err := a.fish.unbind(id); err != nil {
+		if err := a.fish.Unbind(id); err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
@@ -381,7 +374,7 @@ func (a *accountRegistry) list(w http.ResponseWriter, r *http.Request) {
 	// Snapshot bindings while the account set is locked. Manage operations take
 	// the same account-then-fish lock order, so a response cannot combine an
 	// earlier identity view with a later account registry view.
-	fishID, fishBindings, fishErr := a.fish.bindings()
+	fishID, fishBindings, fishErr := a.fish.Bindings()
 	if fishErr != nil {
 		// An unreadable identity registry must never be represented as a clean
 		// unbound state. Keep ordinary account status available, but make the
@@ -466,7 +459,7 @@ func fishIDForAccount(fishID string, bindings map[string]bool, account string) s
 
 // selectAccount never falls back to primary for an unknown or conflicting ID.
 func (a *accountRegistry) selectAccount(w http.ResponseWriter, r *http.Request, primary http.Handler) {
-	if !strings.HasPrefix(r.URL.Path, "/api/") || (r.URL.Path == "/api/accounts" || strings.HasPrefix(r.URL.Path, "/api/accounts/")) || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
+	if !strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/api/local/") || apphttp.OwnsPath(r.URL.Path) || (r.URL.Path == "/api/accounts" || strings.HasPrefix(r.URL.Path, "/api/accounts/")) || r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/password" || r.URL.Path == "/api/session" {
 		primary.ServeHTTP(w, r)
 		return
 	}

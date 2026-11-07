@@ -27,6 +27,19 @@ CREATE TABLE IF NOT EXISTS events(
  suppressed INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,payload BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS events_scope_seq ON events(scope,seq);
 CREATE INDEX IF NOT EXISTS events_scope_time ON events(scope,at,id);
+CREATE INDEX IF NOT EXISTS events_scope_trace ON events(scope,trace);
+CREATE TABLE IF NOT EXISTS local_tool_checkpoints(
+ event_id TEXT NOT NULL,revision INTEGER NOT NULL,call_key TEXT NOT NULL,
+ tool TEXT NOT NULL,grant_key TEXT NOT NULL,target TEXT NOT NULL,result TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(event_id,revision,call_key));
+CREATE TABLE IF NOT EXISTS local_task_followups(
+ id TEXT PRIMARY KEY,scope TEXT NOT NULL,request_id TEXT NOT NULL,process_id TEXT NOT NULL,
+ home_revision INTEGER NOT NULL,source_event_id TEXT NOT NULL,source_revision INTEGER NOT NULL,
+ source_hash TEXT NOT NULL,source BLOB NOT NULL,state TEXT NOT NULL,next_at TEXT NOT NULL,
+ created_at TEXT NOT NULL,updated_at TEXT NOT NULL,reason TEXT NOT NULL,revision INTEGER NOT NULL,
+ result_tool TEXT NOT NULL DEFAULT '',job_id TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS local_task_followups_due ON local_task_followups(scope,state,next_at,id);
+CREATE INDEX IF NOT EXISTS local_task_followups_page ON local_task_followups(scope,id);
 CREATE INDEX IF NOT EXISTS events_reflection_observable_v2 ON events(scope,seq DESC,id DESC) WHERE role='user' AND suppressed=0 AND instr(CAST(payload AS TEXT),'"observation_excerpt":')>0;
 CREATE TABLE IF NOT EXISTS observations(event_id TEXT,hash TEXT,text TEXT,PRIMARY KEY(event_id,hash));
 CREATE TABLE IF NOT EXISTS event_revisions(event_id TEXT,revision INTEGER,text TEXT,hash TEXT,PRIMARY KEY(event_id,revision));
@@ -61,6 +74,47 @@ CREATE INDEX IF NOT EXISTS experience_reflections_source ON experience_reflectio
 CREATE INDEX IF NOT EXISTS experience_reflections_recent_feeling ON experience_reflections(scope,created DESC,id DESC) WHERE status='active' AND instr(CAST(payload AS TEXT),'"feeling":')>0;
 CREATE TABLE IF NOT EXISTS experience_reflection_revisions(reflection_id TEXT,revision INTEGER,payload BLOB NOT NULL,PRIMARY KEY(reflection_id,revision));
 `
+
+// Existing ledgers predate tool targets. Inspect columns before altering so
+// opening a current store or retrying after interruption is safe and preserves rows.
+func upgradeLocalTaskFollowupTargets(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query("PRAGMA table_info(local_task_followups)")
+	if err != nil {
+		return err
+	}
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	err = rows.Err()
+	closeErr := rows.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	for _, name := range []string{"result_tool", "job_id"} {
+		if !columns[name] {
+			if _, err = tx.Exec("ALTER TABLE local_task_followups ADD COLUMN " + name + " TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
 
 // Fixed-width UTC timestamps sort chronologically in SQLite TEXT indexes,
 // including whole seconds and fractional seconds in the same result set.
@@ -147,6 +201,9 @@ func openSQLiteAt(dir, path string, allowImport bool) (*Store, error) {
 		if _, err = db.Exec(q); err != nil {
 			return fail(err)
 		}
+	}
+	if err = upgradeLocalTaskFollowupTargets(db); err != nil {
+		return fail(err)
 	}
 	if err = os.Chmod(path, 0600); err != nil {
 		return fail(err)

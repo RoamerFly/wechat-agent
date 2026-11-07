@@ -70,6 +70,7 @@ type Job struct {
 	PackageDigest   string          `json:"package_digest"`
 	Tool            string          `json:"tool"`
 	Arguments       json.RawMessage `json:"arguments"`
+	Submission      json.RawMessage `json:"submission,omitempty"`
 	Revision        int             `json:"revision"`
 	CancelRequested bool            `json:"cancel_requested"`
 	Created         string          `json:"created"`

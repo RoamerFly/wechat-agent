@@ -26,13 +26,31 @@ func TestPublicBVMetadataUsesExactVideoAndSelectedPart(t *testing.T) {
 }
 func TestProgressiveSourceRejectsRestrictedTooLargeAndForeignHosts(t *testing.T) {
 	good := `{"code":0,"data":{"timelength":100000,"durl":[{"url":"https://cdn.bilivideo.com/up/video.mp4?token=public-playback","size":1234}]}}`
-	raw, duration, e := parseBiliProgressive([]byte(good), 2000)
+	raw, duration, e := parseBiliProgressive([]byte(good), 2000, false)
 	if e != nil || raw == "" || duration != 100000 {
 		t.Fatal(raw, duration, e)
 	}
 	for _, bad := range []string{strings.Replace(good, `"code":0`, `"code":-10403`, 1), strings.Replace(good, `"timelength":100000`, `"timelength":100000,"is_preview":1`, 1), strings.Replace(good, "cdn.bilivideo.com", "cdn.bilivideo.com.evil.invalid", 1), strings.Replace(good, "100000", "900000", 1), strings.Replace(good, "1234", "4000", 1), strings.Replace(good, "https://cdn.bilivideo.com", "http://127.0.0.1", 1)} {
-		if _, _, e = parseBiliProgressive([]byte(bad), 2000); e == nil {
+		if _, _, e = parseBiliProgressive([]byte(bad), 2000, false); e == nil {
 			t.Fatal("unsafe source accepted")
+		}
+	}
+}
+
+func TestPlaybackSamplingRequiresDeclaredProgressiveMP4(t *testing.T) {
+	const source = `{"code":0,"data":{"format":"mp4","timelength":900000,"durl":[{"url":"https://cdn.bilivideo.com/synthetic.mp4","size":1234}]}}`
+	if _, duration, err := parseBiliProgressive([]byte(source), 2000, true); err != nil || duration != 900000 {
+		t.Fatalf("small long media should remain eligible for a bounded sample: %d %v", duration, err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(source, `"code":0,`, "", 1),
+		strings.Replace(source, `"mp4"`, `"flv"`, 1),
+		strings.Replace(source, `"size":1234`, `"size":0`, 1),
+		strings.Replace(source, `"format":"mp4"`, `"format":"mp4","is_preview":true`, 1),
+		strings.Replace(source, `"format":"mp4"`, `"format":"mp4","is_preview":"1"`, 1),
+	} {
+		if _, _, err := parseBiliProgressive([]byte(invalid), 2000, true); err == nil {
+			t.Fatal("unverified playback source accepted")
 		}
 	}
 }

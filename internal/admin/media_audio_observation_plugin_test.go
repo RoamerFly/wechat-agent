@@ -118,7 +118,7 @@ func TestMediaAudioObservationExactRequestSingleAttemptAndPrivateModelOpinion(t 
 	if err != nil || bytes.Contains(verified.Result, []byte("Synthetic audio observation")) || !bytes.Contains(verified.Private, []byte("Synthetic audio observation")) || bytes.Contains(verified.Private, []byte("private reasoning sentinel")) || !bytes.Contains(verified.Private, []byte(`"voice_identity_evidence":"model_opinion_only"`)) || !bytes.Contains(verified.Private, []byte(`"provider_model":"provider-audio-revision"`)) {
 		t.Fatal("audio observation lost bounded private provenance", err, string(verified.Result), string(verified.Private))
 	}
-	u := f.manager.billing.data.Purposes["plugin_media_audio_observation"]
+	u := f.manager.billing.PurposeTotals("plugin_media_audio_observation")
 	if u.Requests != 1 || u.Reported != 1 || u.Input != 11 || u.Output != 5 {
 		t.Fatal("audio observation provider usage lost", u)
 	}
@@ -178,7 +178,7 @@ func TestMediaAudioObservationHonorsResponseLimitAndRejectsPluginUsageClaims(t *
 	if _, err := p.Validate(t.Context(), job, cap, raw); err == nil {
 		t.Fatal("plugin-created usage claims were accepted")
 	}
-	usage := f.manager.billing.data.Purposes["plugin_media_audio_observation"]
+	usage := f.manager.billing.PurposeTotals("plugin_media_audio_observation")
 	if usage.Requests != 1 || usage.Reported != 0 || usage.Input != 0 || usage.Output != 0 {
 		t.Fatal("provider-unreported audio usage became fabricated counts", usage)
 	}
@@ -263,7 +263,7 @@ func TestMediaAudioObservationUncertainTransportNoRetryAndPostCallRevocation(t *
 					t.Fatal("uncertain/revoked audio attempt returned usable evidence")
 				}
 			}
-			if calls != 1 || f.manager.billing.data.Purposes["plugin_media_audio_observation"].Requests != 1 || f.manager.billing.data.Purposes["plugin_media_audio_observation"].Reported != 0 {
+			if calls != 1 || f.manager.billing.PurposeTotals("plugin_media_audio_observation").Requests != 1 || f.manager.billing.PurposeTotals("plugin_media_audio_observation").Reported != 0 {
 				t.Fatal("uncertain audio usage was replayed or reported as zero", calls)
 			}
 			if _, err := p.Validate(t.Context(), job, cap, audioObservationResult(p, "observed", "synthetic")); err == nil {

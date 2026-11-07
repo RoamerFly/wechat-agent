@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "observation.web-page-text",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人单独开启后读取首页实际可见文字；主人扩大范围后，可读取从首页实际发现的视频页面文字",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "explicit-owner-web-read"
+    },
+    {
+      "id": "observation.web-playback",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人独立允许后，静音采样首页实际发现并核验的视频页主媒体，只记录实际播放区间",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-sample-playback"
+    },
+    {
+      "id": "observation.web-audio",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人独立允许后取得确切视频原件，经本机 FFmpeg 和已启用的本机语音识别按窗口转写，不表示画面已理解或视频已看完",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-transcribe-audio"
+    },
+    {
+      "id": "observation.web-visual",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人独立允许后，从已核对的确切视频原件按批解码 1–12 帧并交给已启用的媒体理解工具；返回媒体摘要、实际 PTS 和可继续位置，不表示完整观看",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-inspect-visual"
+    },
+    {
+      "id": "observation.web-comments",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在独立评论许可下读取已核对视频页面实际加载的评论，保留评论编号、作者及续读位置；第三方评论不作为视频原话",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-read-comments"
+    },
+    {
+      "id": "publication.web-creator",
+      "implementation": "ready",
+      "description": "由 Windows 宿主在主人明确保存网页登录资料并单独开启发布许可后，通过创作者中心上传已核验的作品；提交前持久登记，重启后只查询回执，不会自动重复发布",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "explicit-owner-web-publish"
+    },
+    {
+      "id": "interaction.web-like",
+      "implementation": "synthetic-verified",
+      "description": "在主人单独允许后，将已读取且来源仍有效的确切视频点赞状态设为明确的 true 或 false；宿主在提交前持久登记，结果未知时只查询原任务，不以新任务重复点击。实际抖音页面 DOM 与平台服务端回执尚未验证。",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-like-actions"
+    },
+    {
+      "id": "interaction.web-reply-comment",
+      "implementation": "synthetic-verified",
+      "description": "在主人单独允许后回复已读取的确切父评论；任务绑定评论编号和宿主签发的来源版本，父评论变更或未知结果时停止提交并只查询原任务。实际抖音页面 DOM 与平台服务端回执尚未验证。",
+      "permissions": [],
+      "discoverable": true,
+      "requires_owner_setting": "web-reply-comments"
+    }
+  ]
+}

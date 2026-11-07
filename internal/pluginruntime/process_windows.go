@@ -29,11 +29,28 @@ func isolatedCommand(s LaunchSpec, argv []string) (*exec.Cmd, func(), error) {
 	cleanup := func() { _ = os.Remove(f.Name()) }
 	// The document lives outside all plugin mounts; no control-plane credentials
 	// or host environment are inherited by the child.
-	doc := map[string]any{"argv": argv, "cwd": s.DataDir, "writable": []string{s.DataDir}, "read_only": readOnlyRoots(s), "parent_pid": os.Getpid()}
+	processArgs := append([]string(nil), argv...)
+	for i, arg := range processArgs {
+		if filepath.IsAbs(arg) {
+			processArgs[i] = WindowsProcessPath(arg)
+		}
+	}
+	readonly := readOnlyRoots(s)
+	for i, path := range readonly {
+		readonly[i] = WindowsProcessPath(path)
+	}
+	doc := map[string]any{"argv": processArgs, "cwd": WindowsProcessPath(s.DataDir), "writable": []string{WindowsProcessPath(s.DataDir)}, "read_only": readonly, "parent_pid": os.Getpid()}
 	// Older brokers validate this exact envelope. Extend it only when the
 	// plugin actually needs a host-supplied environment (e.g. documents).
 	if len(s.Environment) > 0 {
-		doc["environment"] = s.Environment
+		environment := make(map[string]string, len(s.Environment))
+		for name, value := range s.Environment {
+			if name == "DOCUMENT_RUNTIME_ROOT" {
+				value = WindowsProcessPath(value)
+			}
+			environment[name] = value
+		}
+		doc["environment"] = environment
 	}
 	err = json.NewEncoder(f).Encode(doc)
 	closeErr := f.Close()

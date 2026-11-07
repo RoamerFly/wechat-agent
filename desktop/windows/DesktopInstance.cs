@@ -6,6 +6,9 @@ namespace WechatAgent.Desktop {
     // --workspace paths. Deployment identity still scopes service ownership.
     internal sealed class DesktopInstance : IDisposable {
         internal const string Name = "Local\\RoamerFly.WechatAgent.Desktop.v2";
+        // LocalStation preview is a separate desktop product.  It must never
+        // send lifecycle commands to an already-running WeChat desktop window.
+        internal const string LocalStationName = "Local\\RoamerFly.AgentHomeStation.Local.v1";
         readonly Mutex mutex;
         internal EventWaitHandle Activation { get; private set; }
         internal EventWaitHandle StartRequested { get; private set; }

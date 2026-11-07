@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/linuxnative"
 )
 
@@ -34,7 +35,7 @@ func TestAdministrativeActionsRequirePrepareAndExactApproval(t *testing.T) {
 	if code != 201 || native.actions != 0 {
 		t.Fatal("prepare executed mutation", code)
 	}
-	var proposal actionProposal
+	var proposal wechatapp.ActionProposal
 	if err := json.Unmarshal(data, &proposal); err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +57,11 @@ func TestAdministrativeActionsRequirePrepareAndExactApproval(t *testing.T) {
 	if code, _, _ := f.request("GET", "/api/actions/"+proposal.ID, nil, false, false); code != 200 {
 		t.Fatal("operation read failed")
 	}
-	persisted, err := newActionLedger(f.dir)
+	persisted, err := wechatapp.OpenActionLedger(f.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, ok := persisted.read(proposal.ID, "test")
+	saved, ok := persisted.Read(proposal.ID, "test")
 	if !ok || saved.State != "succeeded" {
 		t.Fatal("operation result not durable")
 	}

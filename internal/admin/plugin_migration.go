@@ -37,6 +37,10 @@ func (s *Server) pluginMigrationRoutes(mux *http.ServeMux) {
 			fail(w, 400, "请确认迁移计划、账号、包摘要和权限")
 			return
 		}
+		if s.manager.mobileRetired && in.Plugin == mobileDevicePluginID {
+			fail(w, http.StatusGone, "手机控制已停用；不能迁移或重新启用历史手机工具")
+			return
+		}
 		if s.manager.draining() {
 			fail(w, 409, "服务正在收尾，请稍后重试")
 			return
@@ -95,6 +99,9 @@ func (m *Manager) applyPluginMigration(ctx context.Context, account, id, sourceH
 	target := m.migrationManager(account)
 	if target == nil {
 		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, errors.New("migration account unavailable")
+	}
+	if target.mobileRetired && id == mobileDevicePluginID {
+		return pluginhost.InstalledPackage{}, pluginhost.Configuration{}, pluginhost.MigrationRecord{}, errDeviceServiceRetired
 	}
 	// Activating external host state replaces the legacy JSON source bytes with
 	// canonical SQLite bytes. A browser retry after the successful POST can

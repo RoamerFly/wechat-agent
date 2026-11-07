@@ -1,6 +1,7 @@
 ﻿param([string]$OutputDirectory,[string]$SourceDirectory,[switch]$Test,[string]$GoSourcePatch)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path $PSScriptRoot -Parent
+
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $workspace 'dist\windows-native\runtimes\windows-x64'}
 if(-not $SourceDirectory){$SourceDirectory=Join-Path $workspace 'temp\windows-native-build'}
 $SourceDirectory=[IO.Path]::GetFullPath($SourceDirectory)
@@ -103,7 +104,7 @@ try {
  $goSource=Join-Path $workspace ('temp\win-go-'+[Guid]::NewGuid().ToString('N').Substring(0,8))
  New-Item -ItemType Directory -Path $goSource | Out-Null
  $goArchive=Join-Path $goSource 'source.tar'
- & git -C $workspace archive --format=tar ('--output='+$goArchive) HEAD cmd internal plugins go.mod go.sum
+ & git -C $workspace archive --format=tar ('--output='+$goArchive) HEAD cmd connected-apps internal plugins go.mod go.sum
  if($LASTEXITCODE -ne 0){throw 'Cannot export committed management source.'}
  & tar -xf $goArchive -C $goSource
  if($LASTEXITCODE -ne 0){throw 'Cannot prepare committed management source.'}
@@ -122,7 +123,13 @@ try {
   $goPatchHash=(Get-FileHash -LiteralPath $GoSourcePatch -Algorithm SHA256).Hash.ToLower()
  }
  Push-Location $goSource
- try {& go build -buildvcs=false -trimpath -o (Join-Path $OutputDirectory 'wechat-admin.exe') ./cmd/wechat-admin; if($LASTEXITCODE -ne 0){throw 'Windows management server build failed.'}} finally {Pop-Location}
+ try {
+  $dependencies=@(& go list -deps ./cmd/wechat-admin)
+  if($LASTEXITCODE -ne 0){throw 'Windows management server dependency check failed.'}
+  if($dependencies -match '^wechat-bot/internal/(adbserver|devicebroker)$'){throw 'Windows management server includes retired device execution dependencies.'}
+  & go build -buildvcs=false -trimpath -o (Join-Path $OutputDirectory 'wechat-admin.exe') ./cmd/wechat-admin
+  if($LASTEXITCODE -ne 0){throw 'Windows management server build failed.'}
+ } finally {Pop-Location}
 } finally {$env:GOOS=$oldOS;$env:GOARCH=$oldArch;$env:CGO_ENABLED=$oldCGO}
 $license=Join-Path $workspace 'components\native-client\LICENSE.upstream'
 if((Get-FileHash -LiteralPath $license -Algorithm SHA256).Hash -ne 'D4D971ACB3CAC94865AAD4787AB934038DF90A304854B41F506AE1187350B574'){throw 'Upstream license checksum mismatch.'}

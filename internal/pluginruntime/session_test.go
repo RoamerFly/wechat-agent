@@ -131,13 +131,15 @@ func TestSessionCarriesHostBoundCallMetadata(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, callMetadataKey{}, callMetadataResult{metadata: map[string]json.RawMessage{
 		"wechat/document": json.RawMessage(`{"inputs":[{"artifact_id":"asset-synthetic","path":"C:/private/input.png"}],"output_dir":"C:/private/out"}`),
+		"station/audio":   json.RawMessage(`{"input":{"artifact_id":"work-synthetic","path":"C:/private/input.wav"}}`),
 	}})
 	raw, err := s.Call(ctx, invocation(), "echo", json.RawMessage(`{"artifact_id":"asset-synthetic"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var result map[string]json.RawMessage
-	if json.Unmarshal(raw, &result) != nil || !strings.Contains(string(result["wechat/document"]), `asset-synthetic`) || strings.Contains(string(result["wechat/context"]), `private/input`) {
+	if json.Unmarshal(raw, &result) != nil || !strings.Contains(string(result["wechat/document"]), `asset-synthetic`) ||
+		!strings.Contains(string(result["station/audio"]), `work-synthetic`) || strings.Contains(string(result["wechat/context"]), `private/input`) {
 		t.Fatalf("host metadata not bound separately: %s", raw)
 	}
 }

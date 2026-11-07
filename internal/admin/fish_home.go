@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"wechat-bot/internal/companion"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/workspacefs"
 )
 
@@ -33,8 +34,8 @@ func (p *permittedTools) boundFishHome() (fishHome, fishID string, err error) {
 		p.trace.Thread != p.trace.Sender || p.trace.IsGroup || strings.HasSuffix(p.trace.Thread, "@chatroom") {
 		return "", "", errors.New("fish_home_scope_denied")
 	}
-	fishID, bound, readErr := p.manager.fish.bindings()
-	if readErr != nil || !validFishID(fishID) || !bound[p.trace.Account] {
+	fishID, bound, readErr := p.manager.fish.Bindings()
+	if readErr != nil || !fishidentity.ValidFishID(fishID) || !bound[p.trace.Account] {
 		return "", "", errors.New("fish_home_scope_denied")
 	}
 	// The physical fish directory is shared only as a parent. The actual host

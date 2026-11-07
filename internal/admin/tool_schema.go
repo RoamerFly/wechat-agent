@@ -29,15 +29,9 @@ type inputSchema struct {
 	MaxLength  *int                   `json:"maxLength"`
 	MaxItems   *int                   `json:"maxItems"`
 }
-type toolArgumentsError struct{ message string }
 
-func (e *toolArgumentsError) Error() string { return e.message }
-func (e *toolArgumentsError) SafeToolFailure() (string, string) {
-	return "tool_arguments_invalid", e.message + "；校验阶段未执行工具，可按提示更正参数"
-}
-func argumentError(path, message string) error {
-	return &toolArgumentsError{fmt.Sprintf("参数 %s：%s", path, message)}
-}
+func argumentError(path, message string) error { return mcptools.ArgumentError(path, message) }
+
 func parameterKey(key string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '_' || r == '-' {

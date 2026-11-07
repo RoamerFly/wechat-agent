@@ -6,9 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/linuxnative"
@@ -100,209 +103,7 @@ func (p *permittedTools) crossAllowed(source, target string) bool {
 	return p.privileged() && p.manager.agent.config().CrossConversation && p.manager.accountThreadKnown(source) && p.manager.accountThreadKnown(target)
 }
 func (p *permittedTools) sendMedia(ctx context.Context, args json.RawMessage) (string, error) {
-	var in crossMediaInput
-	if json.Unmarshal(args, &in) != nil || in.Key == "" || len(in.Key) > 128 || (in.Asset == "") == (in.Message == "") || !contains([]string{"file", "voice", "video", "image"}, in.Kind) {
-		return "", toolInputError("provide one real asset_id or message_id, kind and stable request_key")
-	}
-	if err := in.Conversion.validate(in.Kind); err != nil {
-		return "", err
-	}
-	if in.Source == "" {
-		in.Source = p.trace.Thread
-	}
-	if in.Target == "" {
-		in.Target = p.trace.Thread
-	}
-	if !p.crossAllowed(in.Source, in.Target) || !companion.MediaPermitted(p.manager.Config().Companion.Permissions, in.Kind) {
-		return "", toolInputError("来源、目标或跨会话媒体发送未授权")
-	}
-	var verified *linuxnative.Message
-	if in.Message != "" {
-		msg, e := p.manager.native.Message(ctx, in.Message)
-		if e != nil || msg.ID != in.Message || msg.AccountID != p.trace.Account || msg.ThreadID != in.Source || msg.FileAttachmentName() == "" {
-			return "", toolInputError("source_message_not_owned_file")
-		}
-		verified = &msg
-	}
-	args, _ = json.Marshal(in)
-	return p.privilegedCall(ctx, "wechat_send_media", args, func() (any, error) {
-		m := p.manager
-		m.crossSendMu.Lock()
-		defer m.crossSendMu.Unlock()
-		identity := p.trace.TraceID
-		if p.trace.OriginTraceID != "" {
-			identity = p.trace.OriginTraceID
-		}
-		if p.trace.TaskID != "" {
-			identity = "task:" + p.trace.TaskID
-		}
-
-		if in.Message != "" {
-			msg := *verified
-			var e error
-			if _, e = (mediaUnderstanding{manager: m}).receiveFile(ctx, msg, msg.FileAttachmentName()); e != nil {
-				return nil, e
-			}
-			m.assetMu.Lock()
-			assets, e := m.loadAssets()
-			m.assetMu.Unlock()
-			if e != nil {
-				return nil, e
-			}
-			fingerprint := inboundFingerprint(msg)
-			for _, a := range assets {
-				if a.Account != p.trace.Account || a.Scope != assetScope(companion.Input{Channel: "wechat", Account: p.trace.Account, Thread: in.Source}) {
-					continue
-				}
-				if a.hasOriginal(fingerprint) {
-					in.Asset = a.ID
-					break
-				}
-			}
-		}
-		if identity != "" && in.Asset != "" {
-			entries, e := os.ReadDir(filepath.Join(m.dir, "cross-media"))
-			if e != nil && !os.IsNotExist(e) {
-				return nil, e
-			}
-			for _, entry := range entries {
-				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-					continue
-				}
-				old, e := m.readCrossBatch(strings.TrimSuffix(entry.Name(), ".json"))
-				if e != nil || old.SupersededBy != "" || !old.CancelledAt.IsZero() || old.RequestIdentity != identity && crossBatchAccepted(old) || old.Origin != p.trace.Thread || old.Sender != p.trace.Sender || old.Source != in.Source || old.Target != in.Target || old.Asset != in.Asset || old.Parts[0].Media.Kind != in.Kind || !sameVoiceConversion(old.Conversion, in.Conversion) {
-					continue
-				}
-				state := "queued"
-				if crossBatchAccepted(old) {
-					state = "accepted"
-				} else {
-					if !m.crossSeedAllowed(old.Parts[0]) {
-						return nil, errors.New("cross_media_origin_evidence_requires_review")
-					}
-					for _, part := range old.Parts {
-						if e := p.validateSelectedMediaVoice(part.Media); e != nil {
-							return nil, e
-						}
-					}
-				}
-				return map[string]any{"operation_id": old.ID, "state": state, "source_thread_id": old.Source, "target_thread_id": old.Target, "parts": len(old.Parts), "effective_conversion": old.Conversion.effective(), "reused_existing_operation": true, "instruction": "同一素材目标已有投递批次；核对原operation_id，不创建新的发送队列。"}, nil
-			}
-		}
-		origin, err := p.prepareCrossMediaOrigin(ctx)
-		if err != nil {
-			return nil, err
-		}
-		sourceTrace := p.trace
-		sourceTrace.Thread = in.Source
-		access := &permittedTools{manager: m, trace: sourceTrace, media: map[string]companion.GeneratedMedia{}}
-		var outputs []companion.GeneratedMedia
-		if in.Kind == "file" {
-			m.assetMu.Lock()
-			assets, e := m.loadAssets()
-			m.assetMu.Unlock()
-			if e != nil {
-				return nil, e
-			}
-			var selected *mediaAsset
-			for i := range assets {
-				a := assets[i]
-				if a.ID == in.Asset && a.Account == p.trace.Account && a.Scope == assetScope(sourceTrace) {
-					selected = &a
-					break
-				}
-			}
-			if selected == nil {
-				return nil, errors.New("asset_not_in_source_conversation")
-			}
-			a := *selected
-			if len(a.Hash) != 64 {
-				return nil, errors.New("original_file_not_cached")
-			}
-			n := a.Bytes
-			native, ok := m.native.(nativeTools)
-			if !ok {
-				return nil, errors.New("native_upload_unavailable")
-			}
-			caps, e := native.Capabilities(ctx)
-			if e != nil {
-				return nil, e
-			}
-			if limit := caps.MediaSendMaxBytes["file"]; limit <= 0 || n > limit {
-				return nil, errors.New("native_file_size_limit")
-			}
-			upload, e := m.uploadVerifiedAsset(ctx, native, a)
-			if e != nil {
-				return nil, e
-			}
-			if e = m.tools.upload(stagedUpload{UploadSource: upload, Account: p.trace.Account, Kind: "file"}); e != nil {
-				return nil, e
-			}
-			outputs = []companion.GeneratedMedia{{ID: a.ID + "-file", SourceID: upload.ID, AssetID: a.ID, Kind: "file", Title: a.Title, CachedMIME: a.MIME, VoiceID: a.VoiceID, VoiceEngine: a.VoiceEngine, VoiceProfile: a.VoiceProfile}}
-		} else {
-			raw, e := access.reuseAssetConverted(ctx, in.Asset, in.Kind, in.Conversion)
-			if e != nil {
-				return nil, e
-			}
-			var prepared struct {
-				Media []companion.GeneratedMedia `json:"media"`
-			}
-			if json.Unmarshal([]byte(raw), &prepared) != nil || len(prepared.Media) == 0 {
-				return nil, errors.New("requested_media_format_unavailable")
-			}
-			outputs = prepared.Media
-			for i := range outputs {
-				if staged, ok := access.media[outputs[i].ID]; ok {
-					outputs[i].SourceID = staged.SourceID
-				}
-				if outputs[i].SourceID == "" {
-					outputs[i].SourceID = outputs[i].ID
-				}
-			}
-		}
-		for _, media := range outputs {
-			if e := p.validateSelectedMediaVoice(media); e != nil {
-				return nil, e
-			}
-		}
-		if !p.crossAllowed(in.Source, in.Target) {
-			return nil, rejectOutboundEvidence(errors.New("cross_media_authorization_revoked"))
-		}
-		id := p.operationID("wechat_send_media", args)
-		if err := p.validateCrossMediaOrigin(ctx, origin); err != nil {
-			return nil, err
-		}
-		batch := crossMediaBatch{OriginInput: origin, Conversion: in.Conversion, RequestIdentity: identity, TaskID: p.trace.TaskID, ID: id, Account: p.trace.Account, Origin: p.trace.Thread, Source: in.Source, Target: in.Target, Sender: p.trace.Sender, Asset: in.Asset, Created: time.Now().UTC()}
-		for i, media := range outputs {
-			input := p.trace
-			input.ExpectedVoiceID, input.ExpectedVoiceProfile = p.SelectedVoiceIdentity()
-			input.Thread = in.Target
-			input.TraceID = id
-			input.OriginTraceID = p.trace.TraceID
-			input.TaskID = ""
-			input.IsGroup = strings.HasSuffix(in.Target, "@chatroom")
-			input.QuoteServerID = ""
-			key := agentID(id, in.Target, in.Asset, media.SourceID, string(rune(i+1)))
-			batch.Parts = append(batch.Parts, bot.MediaSeed{Key: key, Trace: id, Input: input, OriginInput: origin, SourceID: media.SourceID, Media: media, OriginThread: p.trace.Thread, SourceThread: in.Source, Requester: p.trace.Sender, OriginTask: p.trace.TaskID})
-		}
-		if e := ensureManaged(filepath.Join(m.dir, "cross-media")); e != nil {
-			return nil, e
-		}
-		b, _ := json.Marshal(batch)
-		if e := writePrivate(filepath.Join(m.dir, "cross-media", id+".json"), b); e != nil {
-			return nil, e
-		}
-		if batch.TaskID != "" {
-			if e := m.bindCrossTask(batch); e != nil {
-				return nil, e
-			}
-		}
-		if e := m.queueCrossBatch(batch); e != nil {
-			return nil, e
-		}
-		m.record(bot.Record{Event: "cross_media_queued", Category: "decision", ThreadID: in.Target, Sender: p.trace.Sender, MessageID: p.trace.TraceID, Content: "[" + in.Kind + "] " + outputs[0].Title, Reason: "explicit_destination_persisted", Status: "queued", Origin: "agent"})
-		return map[string]any{"operation_id": id, "state": "queued", "source_thread_id": in.Source, "target_thread_id": in.Target, "asset_id": in.Asset, "parts": len(batch.Parts), "effective_conversion": in.Conversion.effective(), "instruction": "附件已排入明确目标会话的持久队列，尚未确认送达。用wechat_operation_status核对。不要把附件再加入当前私聊reply.media_ids，不重复生成或发送。"}, nil
-	})
+	return wechatapp.SendMedia(ctx, args, &wechatMediaHost{p: p, raw: slices.Clone(args)})
 }
 
 // The destination input is only a route. Preserve evidence in the originating
@@ -682,6 +483,9 @@ func (m *Manager) readCrossBatch(id string) (crossMediaBatch, error) {
 	}
 	file := filepath.Join(m.dir, "cross-media", id+".json")
 	stat, e := os.Lstat(file)
+	if errors.Is(e, os.ErrNotExist) {
+		return batch, e
+	}
 	if e != nil || !stat.Mode().IsRegular() {
 		return batch, errors.New("cross_media_journal_unavailable")
 	}

@@ -28,8 +28,14 @@ type deviceService interface {
 }
 
 var (
+	errDeviceServiceRetired     = errors.New("手机控制已停用，旧任务仅供查阅")
 	errDeviceServiceClosed      = errors.New("device_service_closed")
 	errDeviceServiceUnavailable = errors.New("device_service_unavailable")
 )
 
-func (m *Manager) newMobileService() deviceService { return newMobileWorkflowService(m) }
+func (m *Manager) newMobileService() deviceService {
+	if m.mobileRetired {
+		return &mobileArchiveService{manager: m}
+	}
+	return newMobileWorkflowService(m)
+}

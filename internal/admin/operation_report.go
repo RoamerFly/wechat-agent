@@ -271,7 +271,7 @@ func (p *permittedTools) RoutePrivateReply(ctx context.Context, messages []strin
 		result, err := p.privilegedCall(ctx, "wechat_send_text", args, func() (any, error) {
 			status, lookupErr := native.LookupSend(ctx, key)
 			if errors.Is(lookupErr, linuxnative.ErrToolNotFound) {
-				status, lookupErr = native.Submit(ctx, linuxnative.ToolSend{ThreadID: target, Kind: "text", Text: text, IdempotencyKey: key})
+				status, lookupErr = p.manager.submitWechat(ctx, native, linuxnative.ToolSend{ThreadID: target, Kind: "text", Text: text, IdempotencyKey: key})
 			}
 			if lookupErr != nil {
 				return nil, lookupErr

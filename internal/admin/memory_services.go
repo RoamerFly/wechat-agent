@@ -179,7 +179,7 @@ func (m *Manager) memoryProvider(c memoryServices) (companion.LanguageModel, err
 			cfg.Model = c.Maintenance.Model
 			cfg.APIKey = c.Maintenance.APIKey
 			cfg.Provider = c.Maintenance.Provider
-			_ = m.billing.record(cfg, u)
+			_ = m.billing.Record(modelForBilling(cfg), u)
 		}
 	}})
 }

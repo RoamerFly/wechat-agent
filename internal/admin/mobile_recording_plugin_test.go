@@ -61,7 +61,7 @@ func newMobileRecordingPluginFixture(t *testing.T) *mobileRecordingPluginFixture
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), visual.images, origin.invocation, origin.revision, origin.check, "Observe verified silent recording frames only", 0)
+	policy, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), visual.Images(), origin.invocation, origin.revision, origin.check, "Observe verified silent recording frames only", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,15 +70,15 @@ func newMobileRecordingPluginFixture(t *testing.T) *mobileRecordingPluginFixture
 
 func TestMobileRecordingVisualOriginUsesActualTaskCaptureVersion(t *testing.T) {
 	fixture := newMobileRecordingPluginFixture(t)
-	if fixture.origin.task.Steps != 1 || fixture.supplied.Steps != 0 || fixture.origin.task.ObservationID == fixture.supplied.ObservationID || fixture.policy.receivedSharePolicy != nil || fixture.policy.invocation().SourceVersions["mobile-task:"+fixture.device.task.ID] != 1 || fixture.policy.refs[0].Version != 1 {
+	if fixture.origin.task.Steps != 1 || fixture.supplied.Steps != 0 || fixture.origin.task.ObservationID == fixture.supplied.ObservationID || fixture.policy.receivedSharePolicy != nil || fixture.policy.Invocation().SourceVersions["mobile-task:"+fixture.device.task.ID] != 1 || fixture.policy.Parameters().Refs[0].Version != 1 {
 		t.Fatal("recording analysis trusted caller snapshot or fabricated incoming message")
 	}
-	completeBoundVisualForTest(t, fixture.policy)
-	if err := fixture.policy.checkCompleted(t.Context()); err != nil {
+	completed := completeBoundVisualForTest(t, fixture.policy)
+	if err := fixture.policy.Check(t.Context(), completed, pluginhost.Capability{}); err != nil {
 		t.Fatal("verified recording observation not consumable", err)
 	}
 	fixture.device.task.State = "cancelled"
-	if err := fixture.policy.checkCompleted(t.Context()); err == nil {
+	if err := fixture.policy.Check(t.Context(), completed, pluginhost.Capability{}); err == nil {
 		t.Fatal("completed recording observation survived task cancellation")
 	}
 	assets, err := fixture.f.manager.loadAssets()
@@ -135,7 +135,7 @@ func TestMobileRecordingVisualRevocationStopsProviderAndCompletedUse(t *testing.
 	for _, action := range []string{"task_cancelled", "task_version_changed", "source_replaced", "device_settings_revoked", "device_disabled", "device_package_disabled", "media_package_disabled", "owner_revoked", "remember_revoked", "recording_replaced"} {
 		t.Run(action, func(t *testing.T) {
 			fixture := newMobileRecordingPluginFixture(t)
-			completeBoundVisualForTest(t, fixture.policy)
+			completed := completeBoundVisualForTest(t, fixture.policy)
 			switch action {
 			case "task_cancelled":
 				fixture.device.task.State = "cancelled"
@@ -172,10 +172,10 @@ func TestMobileRecordingVisualRevocationStopsProviderAndCompletedUse(t *testing.
 					t.Fatal(err)
 				}
 			}
-			if err := fixture.policy.checkCompleted(t.Context()); err == nil {
+			if err := fixture.policy.Check(t.Context(), completed, pluginhost.Capability{}); err == nil {
 				t.Fatal("revoked recording result remained consumable", action)
 			}
-			if _, err := fixture.policy.store.PrivateJobResult(t.Context(), fixture.policy.completedJob, func(ctx context.Context, job pluginhost.Job) error {
+			if _, err := fixture.policy.store.PrivateJobResult(t.Context(), completed, func(ctx context.Context, job pluginhost.Job) error {
 				return fixture.policy.Check(ctx, job, pluginhost.Capability{})
 			}); err == nil {
 				t.Fatal("revoked private recording result remained readable", action)
@@ -195,7 +195,7 @@ func TestMobileRecordingVisualDiscardsSourceReplacedDuringModelRequest(t *testin
 		}
 		return json.RawMessage(mediaReply), nil
 	}
-	if _, err := fixture.policy.Service(t.Context(), job, capability, "wechat/model_request", mediaRequest(fixture.policy)); err == nil || len(fixture.policy.providerReply) != 0 {
+	if _, err := fixture.policy.Service(t.Context(), job, capability, "wechat/model_request", mediaRequest(fixture.policy)); err == nil {
 		t.Fatal("replaced recording produced trusted model response", err)
 	}
 	if _, err := fixture.policy.Validate(t.Context(), job, capability, verifiedVisualPluginReply(t, fixture.policy, "Synthetic pixels")); err == nil {

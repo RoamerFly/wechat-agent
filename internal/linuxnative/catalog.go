@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,6 +19,15 @@ type CatalogPage struct {
 }
 
 func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor string) (CatalogPage, error) {
+	return s.CatalogWithLimit(ctx, kind, thread, search, cursor, 50)
+}
+
+// CatalogWithLimit forwards the requested page size. Native protocol and the
+// one MiB response boundary remain authoritative; callers follow NextCursor.
+func (s *Sender) CatalogWithLimit(ctx context.Context, kind, thread, search, cursor string, limit int) (CatalogPage, error) {
+	if limit < 1 {
+		return CatalogPage{}, &CatalogError{Code: "catalog_query_invalid"}
+	}
 	path := ""
 	fields := []string{}
 	switch kind {
@@ -48,7 +58,7 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 	if len(search) > 256 || len(cursor) > 8192 {
 		return CatalogPage{}, &CatalogError{Code: "catalog_query_invalid"}
 	}
-	query := url.Values{"limit": []string{"50"}}
+	query := url.Values{"limit": []string{strconv.Itoa(limit)}}
 	if search != "" {
 		query.Set("search", search)
 	}
@@ -64,7 +74,7 @@ func (s *Sender) Catalog(ctx context.Context, kind, thread, search, cursor strin
 		NextCursor *string          `json:"nextCursor"`
 		Coverage   any              `json:"coverage"`
 	}
-	if json.Unmarshal(raw, &page) != nil || page.Items == nil || len(page.Items) > 50 {
+	if json.Unmarshal(raw, &page) != nil || page.Items == nil || len(page.Items) > limit {
 		return CatalogPage{}, &CatalogError{Code: "catalog_response_invalid"}
 	}
 	out := CatalogPage{Items: []map[string]any{}, NextCursor: page.NextCursor, Coverage: page.Coverage}

@@ -366,12 +366,45 @@ func (w *Worker) startGeneration(ctx context.Context, c *companion.Engine, input
 		var d companion.Decision
 		var err error
 		if len(in.UnreadMediaIDs) > 0 {
-			err = w.prepareBatchObservations(modelCtx, fork, &in)
+			err = w.prepareBatchObservations(modelCtx, fork, &in, func(record Record) {
+				_ = s.call(modelCtx, func() error { w.activity(record); return w.persistErr })
+			})
 			if err == nil {
 				err = s.call(modelCtx, func() error { j.input = in; j.observationPending = false; return w.persistErr })
 			}
 		}
-		if err == nil && analysis != nil {
+		if err == nil && in.GroupShareSummary {
+			share := analysis
+			if share == nil {
+				readCtx, stop := context.WithTimeout(modelCtx, 10*time.Second)
+				m, readErr := w.source.Message(readCtx, in.TraceID)
+				stop()
+				if readErr != nil || m.ID != in.TraceID || m.ThreadID != in.Thread || m.Direction != "incoming" {
+					if readErr != nil {
+						err = readErr
+					} else {
+						err = errors.New("share_group_source_unavailable")
+					}
+				} else {
+					share = &m
+				}
+			}
+			if err == nil {
+				err = w.readPreparedPreferredGroupShare(modelCtx, fork, &in, *share)
+			}
+			if err != nil && in.IsGroup && !errors.Is(modelCtx.Err(), context.Canceled) {
+				err = &groupObservationFailure{reason: observationReason(err), messageID: in.TraceID}
+			}
+			if err == nil {
+				err = s.call(modelCtx, func() error {
+					w.activity(Record{Event: "preferred_group_share_observed", Category: "tool", ThreadID: in.Thread, MessageID: in.TraceID, Reason: "host_authorized_share_observed", Status: "processing"})
+					j.input = in
+					j.observationPending = false
+					return w.persistErr
+				})
+			}
+		}
+		if err == nil && analysis != nil && !in.GroupShareSummary {
 			readCtx, stop := context.WithTimeout(modelCtx, 3*time.Minute)
 			var summary string
 			incomplete := false
@@ -711,12 +744,16 @@ func (t *generationTools) RetainToolOutput(ctx context.Context, name, result str
 	return "", nil
 }
 func (t *generationTools) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	key := generationToolCallKey(name, args)
-	for _, checkpoint := range t.job.input.RecoveryToolResults {
-		if checkpoint.CallKey == key {
-			// A retry after a model-only fault must not recreate the same external
-			// action. Return the original bounded observation/result instead.
-			return checkpoint.Result, nil
+	policy, scoped := t.inner.(interface{ EphemeralToolResult(string) bool })
+	ephemeral := scoped && policy.EphemeralToolResult(name)
+	if !ephemeral {
+		key := generationToolCallKey(name, args)
+		for _, checkpoint := range t.job.input.RecoveryToolResults {
+			if checkpoint.CallKey == key {
+				// A retry after a model-only fault must not recreate the same external
+				// action. Return the original bounded observation/result instead.
+				return checkpoint.Result, nil
+			}
 		}
 	}
 	if name == "wechat_queue_control" && (t.job.input.Sender == "" || t.job.input.Preview || t.job.input.ReportOnly || t.job.input.Surf) {
@@ -768,7 +805,7 @@ func (t *generationTools) Call(ctx context.Context, name string, args json.RawMe
 		}
 		return nil
 	})
-	if err == nil && name != "discover_tools" && name != "tool_output_read" {
+	if err == nil && !ephemeral && name != "discover_tools" && name != "tool_output_read" {
 		resultID, _ := t.RetainToolOutput(ctx, name, result)
 		evidence, hasEvidence := companion.GenerationEvidenceFromContext(ctx)
 		var privacy *companion.RecoveryPrivacyBinding

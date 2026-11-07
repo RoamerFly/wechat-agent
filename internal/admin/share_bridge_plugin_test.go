@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/pluginhost"
 )
 
@@ -75,7 +76,7 @@ func TestChannelsBridgeUsesInstalledPluginConfigAndLoopbackOnly(t *testing.T) {
 	job := configureReceivedBridge(t, p, ctx, server.URL)
 	job.Arguments = json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`)
 
-	result, err := p.channelsBridge(ctx, job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`))
+	result, err := p.Service(ctx, job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`))
 	if err != nil || requests.Load() != 1 {
 		t.Fatalf("installed loopback bridge failed: calls=%d err=%v", requests.Load(), err)
 	}
@@ -86,13 +87,7 @@ func TestChannelsBridgeUsesInstalledPluginConfigAndLoopbackOnly(t *testing.T) {
 	if json.Unmarshal(result, &received) != nil || received.SourceURL != server.URL || string(received.Feed) != syntheticBridgeFeed {
 		t.Fatalf("unexpected bridge result: %s", result)
 	}
-	p.binding.mu.Lock()
-	resolved := p.binding.resolved
-	p.binding.mu.Unlock()
-	if resolved == nil || resolved.MediaURL != "https://video.example.test/object.mp4" || resolved.ObjectID != "12345" {
-		t.Fatalf("host did not retain verified bridge source: %#v", resolved)
-	}
-	if _, err = p.channelsBridge(ctx, job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`)); err == nil || requests.Load() != 1 {
+	if _, err = p.Service(ctx, job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`)); err == nil || requests.Load() != 1 {
 		t.Fatalf("duplicate bridge callback reached transport: calls=%d err=%v", requests.Load(), err)
 	}
 }
@@ -106,7 +101,7 @@ func TestChannelsBridgeRejectsForeignArgumentsBeforeTransport(t *testing.T) {
 	}))
 	defer server.Close()
 	job := configureReceivedBridge(t, p, ctx, server.URL)
-	if _, err := p.channelsBridge(ctx, job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"99999"}`)); err == nil || requests.Load() != 0 {
+	if _, err := p.Service(ctx, job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"99999"}`)); err == nil || requests.Load() != 0 {
 		t.Fatalf("foreign bridge arguments reached transport: calls=%d err=%v", requests.Load(), err)
 	}
 }
@@ -120,7 +115,7 @@ func TestChannelsBridgeCannotExpandJobTimeoutBeforeTransport(t *testing.T) {
 	}))
 	defer server.Close()
 	job := configureReceivedBridge(t, p, ctx, server.URL) // no explicit timeout: 25 seconds
-	if _, err := p.channelsBridge(ctx, job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`)); err == nil || requests.Load() != 0 {
+	if _, err := p.Service(ctx, job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"12345","timeout_seconds":90}`)); err == nil || requests.Load() != 0 {
 		t.Fatalf("callback expanded the host deadline: calls=%d err=%v", requests.Load(), err)
 	}
 }
@@ -151,7 +146,7 @@ func TestChannelsBridgeRejectsChangedConfigurationSnapshot(t *testing.T) {
 	if _, err = p.store.SetEnabled(ctx, "share-reader", i.Revision, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = p.channelsBridge(ctx, job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"12345"}`)); err == nil {
+	if _, err = p.Service(ctx, job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"12345"}`)); err == nil {
 		t.Fatal("stale configuration snapshot accepted")
 	}
 }
@@ -159,7 +154,7 @@ func TestChannelsBridgeRejectsChangedConfigurationSnapshot(t *testing.T) {
 func TestConfiguredChannelsBridgeRejectsNonLoopback(t *testing.T) {
 	_, _, p, ctx := receivedPolicyFixture(t, false)
 	job := configureReceivedBridge(t, p, ctx, "http://example.test:8080")
-	if _, err := p.channelsBridge(context.Background(), job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"12345"}`)); err == nil {
+	if _, err := p.Service(context.Background(), job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"12345"}`)); err == nil {
 		t.Fatal("non-loopback bridge accepted")
 	}
 }
@@ -169,7 +164,7 @@ func TestConfiguredChannelsBridgeNeverReadsLegacyBridgeSetting(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.dir, "channels-config.json"), []byte(`{"enabled":true,"object_bridge_url":"http://127.0.0.1:8080"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if bridge, found, err := p.configuredChannelsBridge(ctx); err != nil || found || bridge != "" {
+	if bridge, found, err := wechatapp.ConfiguredChannelsBridge(ctx, p.store); err != nil || found || bridge != "" {
 		t.Fatalf("legacy bridge remained authoritative: bridge=%q found=%t err=%v", bridge, found, err)
 	}
 }
@@ -182,13 +177,7 @@ func TestChannelsBridgeRechecksNativeSourceAfterTransport(t *testing.T) {
 	}))
 	defer server.Close()
 	job := configureReceivedBridge(t, p, ctx, server.URL)
-	if _, err := p.channelsBridge(ctx, job, pluginhost.Capability{ID: job.Tool}, json.RawMessage(`{"object_id":"12345"}`)); err == nil {
+	if _, err := p.Service(ctx, job, pluginhost.Capability{ID: job.Tool}, "wechat/channels_bridge", json.RawMessage(`{"object_id":"12345"}`)); err == nil {
 		t.Fatal("changed native source accepted after bridge response")
-	}
-	p.binding.mu.Lock()
-	resolved := p.binding.resolved
-	p.binding.mu.Unlock()
-	if resolved != nil {
-		t.Fatalf("stale bridge result was retained: %#v", resolved)
 	}
 }

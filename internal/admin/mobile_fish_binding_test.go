@@ -41,7 +41,7 @@ func TestMobileFishBindingManagementAPI(t *testing.T) {
 	if err := service.Save(settings); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.manager.fish.bind(f.native.Account()); err != nil {
+	if _, err := f.manager.fish.Bind(f.native.Account()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,14 +104,14 @@ func TestMobileFishBindingFenceKeepsLegacyOwnerControlButRevokesAutonomy(t *test
 		t.Fatalf("legacy owner task blocked before account joins fish: %v", err)
 	}
 
-	fishID, err := f.manager.fish.bind(f.native.Account())
+	fishID, err := f.manager.fish.Bind(f.native.Account())
 	if err != nil {
 		t.Fatalf("bind test account to fish: %v", err)
 	}
 	if err := f.manager.mobileTaskBindingCurrent(legacy); err == nil {
 		t.Fatal("legacy tokenless task continued after account joined fish")
 	}
-	_, first, err := f.manager.fish.bindDevice(f.native.Account(), "synthetic")
+	_, first, err := f.manager.fish.BindDevice(f.native.Account(), "synthetic")
 	if err != nil {
 		t.Fatalf("bind synthetic device: %v", err)
 	}
@@ -121,13 +121,13 @@ func TestMobileFishBindingFenceKeepsLegacyOwnerControlButRevokesAutonomy(t *test
 		t.Fatalf("current fish task rejected: %v", err)
 	}
 
-	if err := f.manager.fish.unbindDevice(f.native.Account(), "synthetic", first); err != nil {
+	if err := f.manager.fish.UnbindDevice(f.native.Account(), "synthetic", first); err != nil {
 		t.Fatalf("unbind synthetic device: %v", err)
 	}
 	if err := f.manager.mobileTaskBindingCurrent(current); err == nil {
 		t.Fatal("unbound task remained authorized")
 	}
-	_, second, err := f.manager.fish.bindDevice(f.native.Account(), "synthetic")
+	_, second, err := f.manager.fish.BindDevice(f.native.Account(), "synthetic")
 	if err != nil {
 		t.Fatalf("rebind synthetic device: %v", err)
 	}
@@ -154,22 +154,22 @@ func TestMobileFishBindingIsAccountScopedAndPersistent(t *testing.T) {
 		t.Fatal(err)
 	}
 	account := native.Account()
-	fishID, err := m.fish.bind(account)
+	fishID, err := m.fish.Bind(account)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, binding, err := m.fish.bindDevice(account, "emulator-5554")
+	_, binding, err := m.fish.BindDevice(account, "emulator-5554")
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherFish, err := m.fish.bind("other-account")
+	otherFish, err := m.fish.Bind("other-account")
 	if err != nil || otherFish != fishID {
 		t.Fatalf("bind other account = (%q, %v), want same fish", otherFish, err)
 	}
-	if _, _, err := m.fish.deviceBindings("other-account"); err != nil {
+	if _, _, err := m.fish.DeviceBindings("other-account"); err != nil {
 		t.Fatalf("other account read its empty binding set: %v", err)
 	}
-	if err := m.fish.unbindDevice("other-account", "emulator-5554", binding); err == nil {
+	if err := m.fish.UnbindDevice("other-account", "emulator-5554", binding); err == nil {
 		t.Fatal("another account removed this account's device binding")
 	}
 	if err := m.Close(); err != nil {
@@ -181,7 +181,7 @@ func TestMobileFishBindingIsAccountScopedAndPersistent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	gotFish, bindings, err := reopened.fish.deviceBindings(account)
+	gotFish, bindings, err := reopened.fish.DeviceBindings(account)
 	if err != nil || gotFish != fishID || len(bindings) != 1 || bindings[0].BindingID != binding {
 		t.Fatalf("reopened device binding = fish %q bindings %#v err %v", gotFish, bindings, err)
 	}
@@ -199,17 +199,17 @@ func TestMobileFishBindingPauseCannotBeBypassedByBinding(t *testing.T) {
 	if err := service.Save(settings); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.manager.fish.bind(f.native.Account()); err != nil {
+	if _, err := f.manager.fish.Bind(f.native.Account()); err != nil {
 		t.Fatal(err)
 	}
-	_, binding, err := f.manager.fish.bindDevice(f.native.Account(), "synthetic")
+	_, binding, err := f.manager.fish.BindDevice(f.native.Account(), "synthetic")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.SetObservationPaused("synthetic", true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, again, err := f.manager.fish.bindDevice(f.native.Account(), "synthetic"); err != nil || again != binding {
+	if _, again, err := f.manager.fish.BindDevice(f.native.Account(), "synthetic"); err != nil || again != binding {
 		t.Fatalf("idempotent bind during takeover = (%q, %v)", again, err)
 	}
 	if _, err := service.Start(mobile.Source{Admin: true, MessageID: "paused-binding-check"}, "synthetic", "read only"); err == nil || err.Error() != "device_observation_paused" {
@@ -226,11 +226,11 @@ func TestMobileFishBindingPauseCannotBeBypassedByBinding(t *testing.T) {
 // transition can revive it.
 func TestMobileFishBindingStartFreezesGenerationAndTickStopsRevokedTask(t *testing.T) {
 	x := newWorkflowFixture(t)
-	fishID, err := x.f.manager.fish.bind(x.f.native.Account())
+	fishID, err := x.f.manager.fish.Bind(x.f.native.Account())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, binding, err := x.f.manager.fish.bindDevice(x.f.native.Account(), "synthetic")
+	_, binding, err := x.f.manager.fish.BindDevice(x.f.native.Account(), "synthetic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestMobileFishBindingStartFreezesGenerationAndTickStopsRevokedTask(t *testi
 	if task.FishID != fishID || task.DeviceBindingID != binding {
 		t.Fatalf("start did not freeze current fish binding: %#v", task)
 	}
-	if err := x.f.manager.fish.unbindDevice(x.f.native.Account(), "synthetic", binding); err != nil {
+	if err := x.f.manager.fish.UnbindDevice(x.f.native.Account(), "synthetic", binding); err != nil {
 		t.Fatal(err)
 	}
 	x.tick(t)
@@ -258,10 +258,10 @@ func TestMobileFishBindingStartFreezesGenerationAndTickStopsRevokedTask(t *testi
 // call, or successful completion under the revoked binding.
 func TestMobileFishBindingUnlinkDuringAdvanceStopsLaterTransitions(t *testing.T) {
 	x := newWorkflowFixture(t)
-	if _, err := x.f.manager.fish.bind(x.f.native.Account()); err != nil {
+	if _, err := x.f.manager.fish.Bind(x.f.native.Account()); err != nil {
 		t.Fatal(err)
 	}
-	_, binding, err := x.f.manager.fish.bindDevice(x.f.native.Account(), "synthetic")
+	_, binding, err := x.f.manager.fish.BindDevice(x.f.native.Account(), "synthetic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestMobileFishBindingUnlinkDuringAdvanceStopsLaterTransitions(t *testing.T)
 	case <-time.After(3 * time.Second):
 		t.Fatal("test action did not enter broker")
 	}
-	if err := x.f.manager.fish.unbindDevice(x.f.native.Account(), "synthetic", binding); err != nil {
+	if err := x.f.manager.fish.UnbindDevice(x.f.native.Account(), "synthetic", binding); err != nil {
 		t.Fatal(err)
 	}
 	close(x.block)

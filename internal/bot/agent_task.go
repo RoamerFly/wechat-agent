@@ -7,6 +7,16 @@ import (
 )
 
 func (w *Worker) taskActive(in companion.Input) bool {
+	if w.config.DeliveryCancelled != nil {
+		cancelled, err := w.config.DeliveryCancelled(in)
+		if err != nil {
+			w.persistErr = err
+			return false
+		}
+		if cancelled {
+			return false
+		}
+	}
 	return in.TaskID == "" || w.config.AgentTaskActive == nil || w.config.AgentTaskActive(in)
 }
 

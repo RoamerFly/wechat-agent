@@ -30,6 +30,9 @@ func (w *Worker) deliveryEvidenceReader(in companion.Input) (*Worker, error) {
 }
 
 func (w *Worker) prepareGroundedText(ctx context.Context, in companion.Input, text string) (companion.Input, string, error) {
+	if w.config.AuthorizeReply != nil && !w.config.AuthorizeReply(in) {
+		return in, text, errors.New("conversation_grant_changed")
+	}
 	in.IsGroup = in.IsGroup || strings.HasSuffix(in.Thread, "@chatroom")
 	w, scopeErr := w.deliveryEvidenceReader(in)
 	if scopeErr != nil {

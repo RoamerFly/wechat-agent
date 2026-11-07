@@ -11,13 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"wechat-bot/internal/adbserver"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/agenthost"
 	"wechat-bot/internal/agentworkspace"
+	"wechat-bot/internal/billing"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
-	"wechat-bot/internal/devicebroker"
+	"wechat-bot/internal/devicespec"
+	"wechat-bot/internal/fishidentity"
 	"wechat-bot/internal/linuxnative"
 	"wechat-bot/internal/pluginhost"
 	"wechat-bot/internal/pluginruntime"
@@ -114,17 +116,20 @@ type Manager struct {
 	workspaceDir        string
 	directoryMu         sync.Mutex
 	accounts            *accountRegistry
-	fish                *fishIdentityRegistry
+	fish                *fishidentity.Registry
 	canvasMu            sync.Mutex
 	friendsMu           sync.Mutex
 	friends             map[string]friendEntry
 	workspace           *agentworkspace.Store
 	processes           *agenthost.Jobs
 	mobile              deviceService
+	mobileRetired       bool
+	deviceIO            devicespec.IOHost
 	agent               *agentControl
 	surfHistory         *surfHistoryStore
 	surfInteractions    *surfInteractionStore
-	billing             *billingStore
+	billing             *billing.Store
+	balance             balanceCache
 	assetMu             sync.Mutex
 	crossSendMu         sync.Mutex
 	storageError        string
@@ -147,18 +152,28 @@ type Manager struct {
 	done                chan struct{}
 	memory              *companion.Store
 	tools               *toolStore
-	actions             *actionLedger
+	actions             *wechatapp.ActionLedger
 	mcp                 mcpSettings
 	plugins             *pluginLedger
 }
 
-// NewManager constructs an independent root manager. Account registries use
-// newManager with their already-owned service fish registry before startup.
+// NewManager constructs a root manager without a native device transport.
 func NewManager(dir, stateDir string, native Native) (*Manager, error) {
-	return newManager(dir, stateDir, native, nil)
+	return newManager(dir, stateDir, native, nil, false, nil)
 }
 
-func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry) (*Manager, error) {
+// NewManagerWithDeviceIO attaches the trusted transport for a legacy host.
+func NewManagerWithDeviceIO(dir, stateDir string, native Native, deviceIO devicespec.IOHost) (*Manager, error) {
+	return newManager(dir, stateDir, native, nil, false, deviceIO)
+}
+
+// NewManagerWithRetiredDeviceControl serves existing Windows deployments with
+// access to historical device records but no device control runtime.
+func NewManagerWithRetiredDeviceControl(dir, stateDir string, native Native) (*Manager, error) {
+	return newManager(dir, stateDir, native, nil, true, nil)
+}
+
+func newManager(dir, stateDir string, native Native, fish *fishidentity.Registry, mobileRetired bool, deviceIO devicespec.IOHost) (*Manager, error) {
 	if native == nil || dir == "" {
 		return nil, errors.New("missing admin runtime configuration")
 	}
@@ -177,7 +192,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 		return nil, errors.New("管理目录不可用")
 	}
 	if fish == nil {
-		fish = newFishIdentityRegistry(dir)
+		fish = fishidentity.New(dir)
 	}
 	c, err := loadConfig(dir)
 	if err != nil {
@@ -197,7 +212,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	if err != nil {
 		return nil, err
 	}
-	actions, err := newActionLedger(dir)
+	actions, err := wechatapp.OpenActionLedger(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +225,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	if stateDir == "" {
 		stateDir = filepath.Join(dir, "bot-state")
 	}
-	billing, err := newBillingStore(dir)
+	ledger, err := billing.Open(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +237,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish}
+	m := &Manager{agent: agent, dir: dir, stateDir: stateDir, native: native, config: c, status: BotStatus{State: "disabled"}, logs: []LogEntry{}, memory: memory, tools: tools, actions: actions, mcp: mcp, plugins: plug, fish: fish, mobileRetired: mobileRetired, deviceIO: deviceIO}
 	externalConfiguration.openStore, externalConfiguration.owned = m.packageStore, false
 	m.workspace, err = agentworkspace.Open(filepath.Join(dir, "agent-workspace"))
 	if err != nil {
@@ -286,7 +301,7 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	if err != nil {
 		return nil, err
 	}
-	m.billing = billing
+	m.billing = ledger
 	if data, readErr := os.ReadFile(filepath.Join(dir, "audit.json")); readErr == nil {
 		if len(data) > 128<<10 || json.Unmarshal(data, &m.logs) != nil || len(m.logs) > 100 {
 			return nil, errors.New("运行审计记录无效，未自动覆盖")
@@ -315,7 +330,14 @@ func newManager(dir, stateDir string, native Native, fish *fishIdentityRegistry)
 	receiptCtx, cancelReceipts := context.WithTimeout(context.Background(), 3*time.Second)
 	m.importOwnerSurfReceipts(receiptCtx)
 	cancelReceipts()
-	if c.Enabled {
+	if archive, ok := m.mobile.(*mobileArchiveService); ok {
+		if err := archive.retire(); err != nil {
+			m.log("device_archive_retirement_failed")
+		}
+	}
+	if c.ConnectionPaused {
+		m.setState("paused")
+	} else if c.Enabled {
 		m.start(c)
 	}
 	workspaceInitialized = true
@@ -388,6 +410,7 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 	previous := cloneConfig(m.config)
 	m.mu.Unlock()
 	next := cloneConfig(input.Config)
+	next.ConnectionPaused = previous.ConnectionPaused
 	if next.Companion.Name == "" {
 		next.Companion = previous.Companion
 	}
@@ -437,6 +460,9 @@ func (m *Manager) saveLocked(input ConfigInput) (ConfigView, error) {
 func (m *Manager) Toggle(enabled bool) error {
 	m.op.Lock()
 	defer m.op.Unlock()
+	if enabled && m.connectionPaused() {
+		return errors.New("微信连接已暂停，请先从应用连接恢复")
+	}
 	if !enabled && m.mobile != nil {
 		if err := m.mobile.StopAll(); err != nil {
 			return err
@@ -472,6 +498,9 @@ func (m *Manager) stop() error {
 	m.cancel = nil
 	m.done = nil
 	m.status.State = "disabled"
+	if m.config.ConnectionPaused {
+		m.status.State = "paused"
+	}
 	m.mu.Unlock()
 	return nil
 }
@@ -487,7 +516,10 @@ func (m *Manager) Close() error {
 	m.packagesClosed = true
 	packages, packageRuntime := m.packages, m.packageRuntime
 	m.packageMu.Unlock()
-	cleanupErr := errors.Join(devicebroker.CleanupQuarantined(), adbserver.CleanupQuarantined())
+	var cleanupErr error
+	if !m.mobileRetired && m.deviceIO != nil {
+		cleanupErr = m.deviceIO.Cleanup()
+	}
 	var packageErr error
 	if packageRuntime != nil {
 		packageErr = packageRuntime.Close()
@@ -529,13 +561,17 @@ func (m *Manager) makeModel(c Config) (*deepseek.Client, error) {
 	}
 	return deepseek.New(deepseek.Config{ThinkingEnabled: &c.ThinkingEnabled, ReasoningEffort: c.ReasoningEffort, BaseURL: c.BaseURL, KeyFile: keyFile, Model: c.Model, SystemPrompt: c.SystemPrompt, MaxTokens: c.MaxTokens, ToolMaxTokens: toolTokens, Compatible: c.Provider == "openai-compatible", OnUsage: func(u deepseek.Usage) {
 		if m.billing != nil {
-			if err := m.billing.record(c, u); err != nil {
+			if err := m.billing.Record(modelForBilling(c), u); err != nil {
 				m.log("usage_record_save_failed")
 			}
 		}
 	}})
 }
 func (m *Manager) start(c Config) {
+	if c.ConnectionPaused {
+		m.setState("paused")
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	m.mu.Lock()
@@ -628,7 +664,7 @@ func (m *Manager) start(c Config) {
 		m.warmFriends(friendCtx)
 		cancelFriends()
 		c.friendIDs = m.cachedFriends()
-		worker, err := bot.New(bot.Config{ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
+		worker, err := bot.New(bot.Config{BeforeSubmit: m.checkWechatSubmission, ObservationFailed: m.queueOwnerDetail, MediaRepairRequired: m.queueMediaRepair, BacklogSettled: m.settleBacklogReviews, AuthorizeThread: m.authorizeConversation, AgentTaskActive: m.agentTaskActive, AgentTask: m.claimAgentTask, AgentTaskDone: m.finishAgentTask, AgentTaskRetry: m.retryAgentTask, AgentTaskDelivery: m.updateAgentDelivery, Draining: m.draining, MediaSeeds: m.takeMediaSeeds, MediaSeedKnown: m.crossSeedKnown, MediaSeedAllowed: m.crossSeedAllowed, MediaSeedSettled: m.settleCrossMediaPart, MediaSeedReceipt: m.crossPartReceipt, StateDir: m.stateDir, SurfTask: m.claimSurf, SurfAllowed: m.surfAllowed, Options: &c.Behavior, Analyzer: mediaUnderstanding{manager: m}, AllowedThreads: c.allowed(), Prefix: c.Prefix, MaxAge: time.Duration(c.MaxAgeSeconds) * time.Second, GroupRules: rules, Log: m.log, Record: m.record}, m.native, model, m.native)
 		if err != nil {
 			m.setState("error")
 			m.log("bot_configuration_error")

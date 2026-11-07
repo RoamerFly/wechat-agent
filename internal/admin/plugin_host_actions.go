@@ -46,6 +46,10 @@ func (s *Server) pluginHostActionRoutes(mux *http.ServeMux) {
 			fail(w, 404, "工具操作不可用")
 			return
 		}
+		if s.manager.mobileRetired {
+			fail(w, http.StatusGone, "手机控制已停用；保留任务、截图和录屏仅供查阅")
+			return
+		}
 		store, err := s.manager.packageStore()
 		if err != nil {
 			fail(w, 500, "工具存储不可用")

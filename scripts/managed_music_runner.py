@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import uuid
 
 
@@ -167,11 +168,14 @@ def command(public, private, cwd, argv, gpu=False, ipc=None):
     return args + ["--chdir", str(cwd), "--", *argv]
 
 
-def run(public, private, cwd, argv, *, gpu=False, timeout=None, ipc=None):
+def run(public, private, cwd, argv, *, gpu=False, timeout=None, ipc=None, cancelled=None):
     if sys.platform == "win32":
-        child = launch_windows(public, private, cwd, argv, gpu=gpu)
+        if cancelled is not None and cancelled():
+            raise RuntimeError("station_rvc_interrupted")
+        options = {"station_rvc": True} if cancelled is not None else {}
+        child = launch_windows(public, private, cwd, argv, gpu=gpu, **options)
         try:
-            code = child.wait(timeout=timeout)
+            code = wait_windows(child, timeout, cancelled)
             if code:
                 raise subprocess.CalledProcessError(code, argv)
         except BaseException:
@@ -180,6 +184,8 @@ def run(public, private, cwd, argv, *, gpu=False, timeout=None, ipc=None):
                 child.wait()
             raise
         return
+    if cancelled is not None:
+        raise RuntimeError("station_rvc_windows_required")
     child = subprocess.Popen(command(public, private, cwd, argv, gpu, ipc), env={"PATH": "/usr/bin:/bin"}, start_new_session=True)
     try:
         code = child.wait(timeout=timeout)
@@ -192,7 +198,24 @@ def run(public, private, cwd, argv, *, gpu=False, timeout=None, ipc=None):
         raise
 
 
-def launch_windows(public, private, cwd, argv, *, gpu=False):
+def wait_windows(child, timeout, cancelled):
+    if cancelled is None:
+        return child.wait(timeout=timeout)
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    while True:
+        if cancelled():
+            # The caller kills the exact owned LPAC Job, including descendants.
+            raise RuntimeError("station_rvc_interrupted")
+        remaining = deadline - time.monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise subprocess.TimeoutExpired("station-rvc", timeout)
+        try:
+            return child.wait(timeout=min(0.25, remaining) if remaining is not None else 0.25)
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def launch_windows(public, private, cwd, argv, *, gpu=False, station_rvc=False):
     """Trusted music-only policy; ordinary Agent broker has no such switch."""
     if sys.platform != "win32" or os.environ.get("WECHAT_WINDOWS_MUSIC_POLICY") != "registry-read-private-network-v1":
         raise RuntimeError("windows_music_policy_not_authorized")
@@ -209,6 +232,13 @@ def launch_windows(public, private, cwd, argv, *, gpu=False):
     if not binary.is_relative_to(public / "runtimes"):
         raise ValueError("music_interpreter_not_managed")
     training = training_readonly(public, argv)
+    readonly = [str(public)]
+    if station_rvc:
+        control = canonical(Path(__file__).parent)
+        if (control.name != "windows-station-rvc" or control.is_relative_to(public.parent) or
+                len(argv) < 2 or canonical(argv[1]) != control / "singing_voice.py"):
+            raise ValueError("station_rvc_converter_not_packaged")
+        readonly.append(str(control))
     from windows_lpac import launch
     media = canonical(os.environ["WECHAT_WINDOWS_MUSIC_MEDIA"])
     if not (media / "ffmpeg.exe").is_file() or not (media / "ffprobe.exe").is_file():
@@ -225,7 +255,7 @@ def launch_windows(public, private, cwd, argv, *, gpu=False):
     environment["WECHAT_WINDOWS_MUSIC_RUNTIME"] = "1"
     environment["USERNAME"] = "managed-music"
     with (log / "stdout.log").open("wb") as output, (log / "stderr.log").open("wb") as error:
-        child = launch(argv, str(cwd), [str(private)], [str(public), str(media), *training], output, error,
+        child = launch(argv, str(cwd), [str(private)], [*readonly, str(media), *training], output, error,
                        music_runtime=True, environment=environment)
         child.log_directory = log
         return child

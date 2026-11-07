@@ -79,9 +79,9 @@ func TestStoppedAgentCancelsOnlyUnsubmittedCrossMediaBatch(t *testing.T) {
 	f.login()
 	n := &receiptLookupNative{forwardNative: f.manager.native.(*forwardNative), statuses: map[string]linuxnative.ToolStatus{}}
 	f.manager.native = n
-	f.manager.mu.Lock()
-	f.manager.status.State = "disabled"
-	f.manager.mu.Unlock()
+	if err := f.manager.setConnectionRunning(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
 	path := "/api/agent/media-batches/" + batch.ID + "/cancel"
 	if code, _, _ := f.request("POST", path, map[string]any{}, true, true); code != 200 {
 		t.Fatal("unsubmitted batch was not cancelled", code)

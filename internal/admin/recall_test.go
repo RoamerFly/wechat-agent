@@ -28,6 +28,7 @@ func TestOwnerRecallIsDiscoverableScopedIdempotentAndPollsNative(t *testing.T) {
 	c := f.manager.agent.config()
 	c.CrossConversation = true
 	c.PrivilegedThreads = []string{"*"}
+	c.AccountActions = []string{"recall", "rename"}
 	if e := f.manager.agent.save(c); e != nil {
 		t.Fatal(e)
 	}
@@ -60,6 +61,46 @@ func TestOwnerRecallIsDiscoverableScopedIdempotentAndPollsNative(t *testing.T) {
 	n.msg.Direction = "incoming"
 	if _, e = p.Call(context.Background(), "wechat_recall", json.RawMessage(`{"thread_id":"room@chatroom","message_id":"incoming","request_key":"another"}`)); e == nil {
 		t.Fatal("recalled other user's message")
+	}
+	n.msg.Direction = "outgoing"
+	c = f.manager.agent.config()
+	c.AccountActions = []string{"rename"}
+	c.OwnerIDs = append(c.OwnerIDs, "other_owner")
+	if e = f.manager.agent.save(c); e != nil {
+		t.Fatal(e)
+	}
+	if p.agentToolEnabled("wechat_recall") || !p.agentToolEnabled("wechat_account_action") {
+		t.Fatal("revocation changed the wrong tools")
+	}
+	for tool, params := range map[string]json.RawMessage{
+		"wechat_recall":         args,
+		"wechat_account_action": json.RawMessage(`{"kind":"recall","thread_id":"room@chatroom","message_id":"message-one","server_id":"server-message-one"}`),
+	} {
+		if _, e = p.Call(context.Background(), tool, params); e == nil || n.actions != 1 {
+			t.Fatal("revoked recall was submitted", tool, e)
+		}
+	}
+	if result, e = p.Call(context.Background(), "wechat_operation_status", poll); e != nil || !strings.Contains(result, "succeeded") {
+		t.Fatal("revocation blocked readback of the existing receipt", result, e)
+	}
+	f.login()
+	code, body, _ := f.request("GET", wechatAppTestPath("test")+"/operations/"+out["operation_id"].(string), nil, true, false)
+	if code != 200 || !strings.Contains(string(body), `"state":"succeeded"`) || strings.Contains(string(body), "wxid_owner") {
+		t.Fatal("app action query did not project a scoped receipt", code, string(body))
+	}
+	persisted, e := newAgentControl(f.manager.dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	op := persisted.data.Operations[out["operation_id"].(string)]
+	if op.AppAction == nil || op.AppAction.RequesterID != "wxid_owner" || op.AppAction.Target != "room@chatroom" ||
+		op.AppAction.SourceThread != "wxid_owner" || op.AppAction.SourceRequestID != "turn-1" ||
+		op.AppAction.ConnectionRef != wechatConnectionRef("test") || op.AppAction.IdempotencyKey != agentID("test", "room@chatroom", "recall-one", "recall") {
+		t.Fatalf("original action scope was not persisted: %+v", op.AppAction)
+	}
+	p.SetTrace(companion.Input{Account: "test", Thread: "wxid_owner", Sender: "other_owner"})
+	if _, e = p.Call(context.Background(), "wechat_operation_status", poll); e == nil {
+		t.Fatal("another trusted sender could read the original requester's action")
 	}
 	p.SetTrace(companion.Input{Account: "test", Thread: "room@chatroom", Sender: "ordinary"})
 	if p.agentToolEnabled("wechat_recall") {

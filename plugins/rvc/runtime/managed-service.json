@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "service": "station-rvc",
+  "protocol": "station-rvc-broker",
+  "protocol_version": 1,
+  "ownership": "host-managed-loopback",
+  "operations": {
+    "health": "health",
+    "profile_health": "profile_health",
+    "submit": "submit_conversion",
+    "lookup": "lookup_request",
+    "status": "job_status",
+    "cancel": "cancel_job",
+    "resume": "resume_job",
+    "artifact": "verified_artifact"
+  },
+  "constraints": {
+    "input": "host-authorized artifact_id only",
+    "voice": "registered voice_profile_id only",
+    "output": "host-verified artifact only",
+    "delivery": "host-owned; not part of this tool"
+  },
+  "execution": "This descriptor is declarative. Only the station host may bind a loopback broker or create jobs; generic MCP execution must not execute this file."
+}

@@ -91,6 +91,21 @@ func TestEndpointAndKeyValidation(t *testing.T) {
 	}
 }
 
+func TestNewWithAPIKeyDoesNotReadKeyFile(t *testing.T) {
+	client, err := NewWithAPIKey(Config{
+		BaseURL:   "https://api.deepseek.com",
+		KeyFile:   filepath.Join(t.TempDir(), "does-not-exist"),
+		Model:     "deepseek-flash",
+		MaxTokens: 256,
+	}, "local-test-key-000000000000000000")
+	if err != nil || client == nil {
+		t.Fatalf("in-memory key construction failed: client=%v err=%v", client, err)
+	}
+	if _, err := NewWithAPIKey(Config{}, "short"); err == nil || strings.Contains(err.Error(), "short") {
+		t.Fatalf("invalid key error leaked or accepted key: %v", err)
+	}
+}
+
 func TestRedirectDoesNotForwardCredential(t *testing.T) {
 	hits := 0
 	destination := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))

@@ -43,7 +43,7 @@ type fakeMobileDeviceIOCall struct {
 	completed bool
 }
 
-func (b *fakeMobileDeviceBroker) Begin(_ context.Context, name string, raw json.RawMessage) (devicebroker.IOCall, error) {
+func (b *fakeMobileDeviceBroker) Begin(_ context.Context, name string, raw json.RawMessage) (mobile.IOCall, error) {
 	if !json.Valid(raw) {
 		return nil, errors.New("unexpected native request")
 	}
@@ -154,7 +154,7 @@ func mobileDevicePolicyFixture(t *testing.T) (*mobileDevicePluginBridge, *mobile
 	settings := mobile.Settings{Revision: 9, Enabled: true, Devices: []string{task.DeviceID}, Actions: []string{"tap", "launch", "open_url"}}
 	f.manager.mobile = &mobilePlanDeviceStub{settings: settings, task: task}
 	fake := &fakeMobileDeviceBroker{raw: `{"text":"{\"id\":\"obs-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"device_id\":\"phone-device\",\"package\":\"com.example.home\",\"width\":100,\"height\":200,\"allowed_packages\":[\"com.example.home\",\"com.browser\"],\"browsers\":[\"com.browser\"],\"web_hosts\":[\"example.test\"],\"nodes\":[],\"observed_at\":1.5,\"screenshot_sha256\":\"private\"}","media":[{"mime_type":"image/png","data_base64":"PRIVATE_PNG_BYTES"}]}`}
-	bridge := &mobileDevicePluginBridge{manager: f.manager, store: store, installed: installed, task: task, settings: settings, brokerOpener: func(context.Context, devicebroker.Options) (devicebroker.IOBroker, error) { return fake, nil }, observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{}}
+	bridge := &mobileDevicePluginBridge{manager: f.manager, store: store, installed: installed, task: task, settings: settings, brokerOpener: func(context.Context, mobile.IOOptions) (mobile.IOBroker, error) { return fake, nil }, observations: map[string]mobile.Observation{}, artifacts: map[string]mobile.Artifact{}}
 	policy, err := bridge.newPolicy(t.Context(), "observe", json.RawMessage(`{"device_id":"phone-device"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -481,8 +481,8 @@ func TestLiveMobileDevicePluginContract(t *testing.T) {
 	server := &mobileIOTestADBServer{}
 	calls, dispatches := 0, 0
 	revokeNext := false
-	bridgeRaw.(*mobileDevicePluginBridge).brokerOpener = func(ctx context.Context, o devicebroker.Options) (devicebroker.IOBroker, error) {
-		o.ADBServer = server
+	bridgeRaw.(*mobileDevicePluginBridge).brokerOpener = func(ctx context.Context, input mobile.IOOptions) (mobile.IOBroker, error) {
+		o := devicebroker.Options{IOOptions: input, ADBServer: server}
 		o.Runner = func(ctx context.Context, path string, args []string, limit int64, timeout time.Duration) ([]byte, error) {
 			calls++
 			if path != filepath.Join(options.DeviceToolsRoots[0], "adb.exe") || len(args) < 7 || !reflect.DeepEqual(args[:6], []string{"-H", "127.0.0.1", "-P", "5037", "-s", "synthetic-serial-phone-device"}) || limit < 1 || timeout <= 0 {

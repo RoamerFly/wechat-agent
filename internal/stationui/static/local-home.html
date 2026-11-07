@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Agent-home-station · 大肥鱼的家</title>
+  <link rel="stylesheet" href="/assets/local-home.css">
+</head>
+<body class="local-home-page">
+  <main class="home-shell">
+    <section class="home-panel" aria-labelledby="home-title">
+      <div class="home-visual" aria-hidden="true">
+        <img class="sea" src="/assets/night-sea.webp" alt="">
+        <div class="sea-wash"></div>
+        <div class="orbit orbit-one"></div>
+        <div class="orbit orbit-two"></div>
+        <img class="fish" src="/assets/whale-girl-cutout.png" alt="">
+        <p>DAFEIYU / HOME</p>
+      </div>
+
+      <div class="home-content">
+        <div class="eyebrow"><span class="pulse"></span>成长期 · 第一站</div>
+        <h1 id="home-title">给大肥鱼一个家</h1>
+        <p class="lead">她会在自己的空间里留下日记、作品和工具。这里由你掌管，身份与私密资料始终由软件隔离保管。</p>
+
+        <section id="login-view" class="access-card" aria-labelledby="login-title" hidden>
+          <div>
+            <p class="section-kicker">管理员验证</p>
+            <h2 id="login-title">先确认是你</h2>
+            <p>登录后才能准备、暂停或恢复大肥鱼的家。</p>
+          </div>
+          <form id="login-form" class="login-form">
+            <label for="login-password">管理密码</label>
+            <div class="input-row">
+              <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+              <button id="login-submit" class="button primary" type="submit">进入</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="home-view" class="home-status" aria-live="polite" hidden>
+          <div class="status-head">
+            <div>
+              <p id="status-kicker" class="section-kicker">准备中</p>
+              <h2 id="status-title">为大肥鱼准备家</h2>
+            </div>
+            <span id="access-chip" class="access-chip">尚未授权</span>
+          </div>
+
+          <p id="stage-note" class="stage-note">准备好后，她可以在这里整理自己的作品与工具。</p>
+          <div id="setup-actions" class="action-row">
+            <button id="initialize-button" class="button primary" type="button">为大肥鱼准备家</button>
+            <button id="access-button" class="button secondary" type="button" hidden></button>
+            <button id="logout-button" class="button quiet" type="button">退出登录</button>
+          </div>
+
+          <section id="local-workspace" class="local-workspace" hidden aria-label="大肥鱼工作台">
+            <nav class="local-tabs" aria-label="本地功能">
+              <div class="local-tab-list" role="tablist" aria-label="工作台页面">
+                <button id="chat-tab" class="local-tab is-active" type="button" role="tab" aria-controls="chat-view" aria-selected="true">聊天</button>
+                <button id="apps-tab" class="local-tab" type="button" role="tab" aria-controls="apps-view" aria-selected="false" tabindex="-1">应用</button>
+                <button id="project-tools-tab" class="local-tab" type="button" role="tab" aria-controls="project-tools-view" aria-selected="false" tabindex="-1">项目工具</button>
+                <button id="settings-tab" class="local-tab" type="button" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">设置</button>
+              </div>
+              <button id="local-logout-button" class="text-action" type="button">退出</button>
+            </nav>
+
+            <section id="chat-view" class="chat-view" role="tabpanel" aria-labelledby="chat-tab">
+              <div class="chat-heading-row">
+                <div>
+                  <h3 id="chat-heading">和大肥鱼聊聊</h3>
+                  <p id="chat-presence" hidden></p>
+                </div>
+                <button id="open-settings-button" class="button compact secondary" type="button" hidden>设置模型</button>
+              </div>
+              <div id="model-setup-note" class="model-setup-note" hidden>
+                <strong>先设置聊天模型</strong>
+                <span>保存后就能在这里开始对话。</span>
+              </div>
+              <div id="chat-stream" class="chat-stream" aria-live="polite" aria-busy="false">
+                <div id="chat-empty" class="chat-empty">
+                  <strong>从一句话开始</strong>
+                  <span>大肥鱼会在这里记下这段对话。</span>
+                </div>
+              </div>
+              <button id="load-older-button" class="text-action load-older" type="button" hidden>查看更早的聊天</button>
+              <form id="chat-form" class="composer">
+                <label class="sr-only" for="chat-input">对大肥鱼说</label>
+                <textarea id="chat-input" rows="2" placeholder="和大肥鱼说点什么…" autocomplete="off"></textarea>
+                <div class="composer-bar">
+                  <span id="chat-progress" class="chat-progress" role="status"></span>
+                  <button id="chat-send" class="button primary" type="submit">发送</button>
+                </div>
+              </form>
+            </section>
+
+            <section id="apps-view" class="apps-view" role="tabpanel" aria-labelledby="apps-tab" hidden>
+              <header class="chat-heading-row">
+                <div>
+                  <h3>应用</h3>
+
+                </div>
+                <button id="apps-refresh" class="button compact secondary" type="button">刷新</button>
+              </header>
+              <p id="apps-feedback" class="apps-feedback" role="status"></p>
+              <details class="identity-details work-register">
+                <summary>登记家目录中的作品</summary>
+                <form id="artifact-form" class="details-grid">
+                  <label for="artifact-path">成品文件</label>
+                  <div class="input-row">
+                    <input id="artifact-path" placeholder="如 作品/讲解.pdf" required autocomplete="off">
+                    <button class="button compact secondary" type="submit">登记作品</button>
+                  </div>
+                  <p id="artifact-result" class="apps-feedback" role="status">保存成品快照后，可在微信连接中授权交付。</p>
+                </form>
+              </details>
+              <div id="apps-list" class="apps-list" aria-busy="false"></div>
+            </section>
+
+            <section id="project-tools-view" class="project-tools-view" role="tabpanel" aria-labelledby="project-tools-tab" hidden>
+              <header class="chat-heading-row">
+                <div>
+                  <h3>项目工具</h3>
+
+                </div>
+                <button id="project-tools-refresh" class="button compact secondary" type="button">刷新</button>
+              </header>
+              <p id="project-tools-feedback" class="project-tools-feedback" role="status"></p>
+              <div id="project-tools-list" class="project-tools-list" aria-busy="false"></div>
+            </section>
+
+            <section id="settings-view" class="settings-view" role="tabpanel" aria-labelledby="settings-tab" hidden>
+              <div class="settings-heading-row">
+                <div>
+                  <h3 id="settings-heading">角色与模型</h3>
+                  <p>主角色用于日常相处，各应用可单独补充。</p>
+                </div>
+                <button id="model-save" class="button compact primary" type="submit" form="model-form">保存设置</button>
+              </div>
+              <form id="model-form" class="model-form">
+                <input id="model-revision" type="hidden" value="0">
+                <fieldset class="settings-group">
+                  <legend>主角色</legend>
+                  <p>决定她的性格和与你的相处方式，应用之外也会使用。</p>
+                  <label>性格与相处方式
+                    <textarea id="model-persona" name="persona" rows="4" maxlength="4000" placeholder="例如：自然真诚，喜欢探索新事物…"></textarea>
+                  </label>
+                </fieldset>
+                <fieldset class="settings-group">
+                  <legend>聊天模型</legend>
+                <div class="field-grid">
+                  <label>服务商
+                    <select id="model-provider" name="provider">
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="openai-compatible">OpenAI 兼容服务</option>
+                    </select>
+                  </label>
+                  <label>模型名称
+                    <input id="model-name" name="model" type="text" value="deepseek-flash" required>
+                  </label>
+                </div>
+                <label>接口地址
+                  <input id="model-base-url" name="base_url" type="url" placeholder="https://api.deepseek.com" required>
+                </label>
+                <div class="field-grid">
+                  <label>单次回复上限
+                    <input id="model-max-tokens" name="max_tokens" type="number" min="128" max="32768" step="1" value="4096" required>
+                  </label>
+                  <label>思考强度
+                    <select id="model-reasoning" name="reasoning_effort">
+                      <option value="low">低</option>
+                      <option value="medium">中</option>
+                      <option value="high">高</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="switch-row" for="model-thinking">
+                  <input id="model-thinking" name="thinking_enabled" type="checkbox" checked>
+                  <span><strong>开启思考</strong><small>让她在回复前多做一步判断。</small></span>
+                </label>
+                <label>API 密钥
+                  <input id="model-api-key" name="api_key" type="password" autocomplete="new-password" placeholder="填写后保存；已有密钥可留空">
+                </label>
+                <label class="switch-row destructive" for="model-clear-key">
+                  <input id="model-clear-key" name="clear_key" type="checkbox">
+                  <span><strong>清除已保存的密钥</strong><small>保存后才会生效。</small></span>
+                </label>
+                </fieldset>
+              </form>
+              <details id="home-details" class="identity-details">
+                <summary>大肥鱼的家</summary>
+                <div class="details-grid">
+                  <div class="detail-block"><span>专属目录</span><code id="home-directory">正在读取…</code></div>
+                  <div class="detail-pair"><div><span>大肥鱼</span><strong id="fish-id">—</strong></div><div><span>主人</span><strong id="owner-id">—</strong></div></div>
+                </div>
+              </details>
+              <div class="settings-actions home-controls">
+                <button id="back-to-chat-button" class="button quiet" type="button">返回聊天</button>
+                <button id="settings-access-button" class="button secondary" type="button"></button>
+                <button id="settings-logout-button" class="button quiet" type="button">退出登录</button>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <p id="page-message" class="page-message" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+  </main>
+  <dialog id="app-dialog" class="app-dialog" aria-labelledby="app-dialog-title">
+    <header class="app-dialog-header">
+      <div><h2 id="app-dialog-title">应用设置</h2><p>连接账号，设定大肥鱼在这个应用中的相处方式。</p></div>
+      <div class="app-dialog-actions"><button id="app-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="app-dialog-close" class="button compact quiet" type="button">关闭</button></div>
+    </header>
+    <nav id="app-dialog-tabs" class="app-dialog-tabs" aria-label="应用设置分区"></nav>
+    <div id="app-dialog-feedback" class="app-dialog-feedback"></div>
+    <div id="app-dialog-body" class="app-dialog-body"></div>
+  </dialog>
+  <dialog id="tool-dialog" class="app-dialog tool-dialog" aria-labelledby="tool-dialog-title">
+    <header class="app-dialog-header">
+      <h2 id="tool-dialog-title">项目工具</h2>
+      <div class="app-dialog-actions"><button id="tool-dialog-refresh" class="button compact secondary" type="button">刷新</button><button id="tool-dialog-close" class="button compact quiet" type="button">关闭</button></div>
+    </header>
+    <div id="tool-dialog-feedback" class="app-dialog-feedback"></div>
+    <div id="tool-dialog-body" class="app-dialog-body"></div>
+  </dialog>
+  <script src="/assets/local-home.js"></script>
+</body>
+</html>

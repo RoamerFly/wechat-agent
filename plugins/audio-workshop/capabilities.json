@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "audio.prepare",
+      "implementation": "ready",
+      "description": "将宿主为当前任务授权的整数 PCM WAV 裁剪或混合为单声道，并生成新的 16 位 PCM WAV 成品。输出包含实际读取范围、哈希和 WAV 结构校验。",
+      "permissions": ["artifact.read", "artifact.write"],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "artifact": {"type": "object", "properties": {"artifact_id": {"type": "string", "maxLength": 128}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, "required": ["artifact_id", "sha256"], "additionalProperties": false},
+          "filename": {"type": "string", "maxLength": 120},
+          "start_seconds": {"type": "number", "minimum": 0},
+          "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+          "channels": {"type": "string", "enum": ["preserve", "mono"]}
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {"type": "object"},
+      "discoverable": true
+    }
+  ]
+}

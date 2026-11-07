@@ -7,14 +7,110 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	mobile "wechat-bot/internal/devicespec"
 	"wechat-bot/internal/pluginhost"
+	"wechat-bot/internal/workspacefs"
 )
 
 const mobileStateNamespace = "device-state-v1"
+
+func (m *Manager) openMobileStateStore(create bool) (*pluginhost.Store, error) {
+	if !create {
+		_, dbErr := os.Stat(filepath.Join(m.dir, "plugin-host", "plugins.sqlite"))
+		_, settingsErr := os.Stat(filepath.Join(m.dir, "mobile", "settings.json"))
+		_, tasksErr := os.Stat(filepath.Join(m.dir, "mobile", "tasks.json"))
+		if errors.Is(dbErr, os.ErrNotExist) && errors.Is(settingsErr, os.ErrNotExist) && errors.Is(tasksErr, os.ErrNotExist) {
+			return nil, nil
+		}
+	}
+	return m.packageStore()
+}
+
+// Import only when the authoritative namespace has not been initialized.
+func importMobileState(ctx context.Context, store *pluginhost.Store, dir string) (pluginhost.HostState, error) {
+	host, err := store.ReadHostState(ctx, mobileDevicePluginID, mobileStateNamespace)
+	if err != nil || host.Revision != 0 {
+		return host, err
+	}
+	legacy, found, err := mobile.ReadLegacyImport(filepath.Join(dir, "mobile"))
+	if err != nil || !found {
+		return host, err
+	}
+	records, err := mobileStateRecords(legacy.Settings, legacy.Tasks, store.Account())
+	if err != nil {
+		return host, err
+	}
+	records["manifest"], _ = json.Marshal(mobileImportManifest{Version: 1, SourceHash: legacy.SourceHash, TaskCount: len(legacy.Tasks)})
+	return store.InitializeHostState(ctx, mobileDevicePluginID, mobileStateNamespace, legacy.SourceHash, records)
+}
+
+func mobileTasksForSource(records map[string]mobile.Task, source *mobile.Source) []mobile.Task {
+	tasks := make([]mobile.Task, 0, len(records))
+	for _, task := range records {
+		if source != nil && !source.Admin && (source.Account != task.Source.Account || source.Thread != task.Source.Thread) {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Created.After(tasks[j].Created) })
+	return tasks
+}
+
+func mobileWorkflowActive(task mobile.Task) bool {
+	return task.State == "queued" || task.State == "running"
+}
+
+func readMobileScreenshot(dir string, task mobile.Task, observationID string) ([]byte, error) {
+	if task.ID == "" || task.ObservationID != observationID || !regexpMobileObservation(observationID) {
+		return nil, errors.New("device_observation_not_found")
+	}
+	return readMobileBlob(dir, "observations", observationID+".png", 128<<20)
+}
+
+func readMobileArtifact(dir string, task mobile.Task, artifactID string) (mobile.Artifact, []byte, error) {
+	for _, artifact := range task.Artifacts {
+		if artifact.ID == artifactID && validID(artifactID) {
+			data, err := readMobileBlob(dir, "recordings", artifactID+".mp4", 128<<20)
+			if err == nil {
+				hash := sha256.Sum256(data)
+				if len(data) != artifact.Bytes || hex.EncodeToString(hash[:]) != artifact.SHA256 {
+					err = errors.New("device_recording_integrity_invalid")
+				}
+			}
+			return artifact, data, err
+		}
+	}
+	return mobile.Artifact{}, nil, errors.New("device_recording_not_found")
+}
+
+func regexpMobileObservation(id string) bool {
+	return len(id) == 36 && strings.HasPrefix(id, "obs-") && strings.Trim(id[4:], "0123456789abcdef") == ""
+}
+
+func readMobileBlob(dir, directory, name string, limit int64) ([]byte, error) {
+	root, err := workspacefs.OpenPath(filepath.Join(dir, "mobile", directory))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := workspacefs.OpenRegular(root, name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, errors.New("device_artifact_exceeds_host_memory_budget")
+	}
+	return data, nil
+}
 
 // mobileRepository keeps device workflows separate from individual plugin
 // invocation Jobs. Only the host can read this namespace; it is not a plugin

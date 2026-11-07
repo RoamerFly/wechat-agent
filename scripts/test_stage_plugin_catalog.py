@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -40,6 +41,48 @@ def reindex(package):
 
 
 class StagePluginCatalogTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows desktop build")
+    def test_windows_desktop_rejects_retired_phone_files_without_overwriting(self):
+        script = SCRIPT.with_name("Build-Desktop.ps1")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for member in ("plugins/mobile-control/old.marker", "runtimes/windows-music/mobile_bridge.py"):
+                with self.subTest(member=member):
+                    output = root / Path(member).name
+                    marker = output / member
+                    marker.parent.mkdir(parents=True)
+                    marker.write_bytes(b"synthetic previous output")
+                    result = subprocess.run(
+                        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                         "-File", str(script), "-LocalStation", "-OutputDirectory", str(output)],
+                        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"Output contains retired mobile components", result.stderr)
+                    self.assertEqual(marker.read_bytes(), b"synthetic previous output")
+                    self.assertFalse((output / "AgentHomeStation.exe").exists())
+
+    def test_selected_package_stages_only_verified_members(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "plugins"
+            selected = write_package(source, "share-reader")
+            write_package(source, "media-understanding")
+            write_package(source, "unrelated-tool")
+            output = root / "bundle"
+            result = stage_plugin_catalog.stage(source, output, selected="share-reader")
+            self.assertEqual(result["packages"], ["share-reader"])
+            self.assertEqual(sorted(path.name for path in output.iterdir()), ["share-reader"])
+            self.assertTrue(stage_plugin_catalog.stage(source, output, selected="share-reader")["idempotent"])
+            result = stage_plugin_catalog.stage(source, root / "selected-tools", selected=["share-reader", "media-understanding"])
+            self.assertEqual(result["packages"], ["media-understanding", "share-reader"])
+            with self.assertRaisesRegex(stage_plugin_catalog.StageError, "requested_package_unavailable"):
+                stage_plugin_catalog.stage(source, root / "missing-tool", selected=["share-reader", "missing-tool"])
+            (selected / "runtime" / "main.py").write_bytes(b"modified")
+            with self.assertRaisesRegex(stage_plugin_catalog.StageError, "plugin_manifest_hash_mismatch"):
+                stage_plugin_catalog.stage(source, root / "tampered", selected="share-reader")
+            self.assertFalse((root / "tampered").exists())
+
     def test_rejects_source_output_overlap_before_source_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -209,12 +252,39 @@ class StagePluginCatalogTests(unittest.TestCase):
                 with self.assertRaisesRegex(stage_plugin_catalog.StageError, "plugin_links_forbidden"):
                     stage_plugin_catalog.stage(source, root / "out")
 
-    def test_real_official_catalog_stages_nine_packages_without_host_go_files(self):
+    def test_application_descriptor_uses_same_integrity_and_update_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source, output = root / "apps", root / "out"
+            source.mkdir()
+            package = write_package(source, name="wechat")
+            (package / "plugin.json").rename(package / "app.json")
+            first = stage_plugin_catalog.stage(source, output, descriptor="app.json")
+            self.assertEqual(first["packages"], ["wechat"])
+            self.assertFalse((output / "wechat" / "plugin.json").exists())
+            self.assertTrue(stage_plugin_catalog.stage(source, output, descriptor="app.json")["idempotent"])
+            member = package / "runtime" / "main.py"
+            member.write_bytes(b"print('updated')\n")
+            with self.assertRaisesRegex(stage_plugin_catalog.StageError, "hash_mismatch"):
+                stage_plugin_catalog.stage(source, output, True, descriptor="app.json")
+            manifest = package / "app.json"
+            data = json.loads(manifest.read_text(encoding="utf8"))
+            data["files"]["runtime/main.py"] = hashlib.sha256(member.read_bytes()).hexdigest()
+            manifest.write_text(json.dumps(data), encoding="utf8")
+            updated = stage_plugin_catalog.stage(source, output, True, descriptor="app.json")
+            self.assertTrue(updated["updated"])
+            self.assertEqual((output / "wechat" / "runtime" / "main.py").read_bytes(), member.read_bytes())
+            self.assertTrue(stage_plugin_catalog.stage(source, output, True, descriptor="app.json")["idempotent"])
+
+    def test_real_official_catalog_stages_packages_without_host_go_files(self):
         source = SCRIPT.parents[1] / "plugins"
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "plugins"
             result = stage_plugin_catalog.stage(source, output)
-            self.assertEqual(len(result["packages"]), 9)
+            self.assertEqual(set(result["packages"]), {
+                "audio-workshop", "comfyui", "document-workshop", "external-tools", "media-understanding", "mobile-control", "music", "obs-preview",
+                "project-development", "rvc", "share-reader", "speech", "station-speech", "visual-generation", "web-search", "yue",
+            })
             self.assertFalse((output / "catalog.go").exists())
             self.assertFalse((output / "catalog_test.go").exists())
             for package in result["packages"]:

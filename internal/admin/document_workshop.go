@@ -22,7 +22,7 @@ import (
 	"wechat-bot/internal/pluginruntime"
 )
 
-const documentWorkshopPluginID = "document-workshop"
+const documentWorkshopPluginID = pluginruntime.DocumentWorkshopID
 
 type documentWorkshopPolicy struct {
 	p                             *permittedTools
@@ -361,17 +361,7 @@ func (d *documentWorkshopPolicy) Validate(ctx context.Context, job pluginhost.Jo
 	return pluginruntime.VerifiedResult{Assets: assets, Result: clean}, nil
 }
 
-func safeDocumentWorkshopCode(value string) bool {
-	if len(value) == 0 || len(value) > 96 {
-		return false
-	}
-	for _, item := range value {
-		if !(item >= 'a' && item <= 'z' || item >= '0' && item <= '9' || item == '_') {
-			return false
-		}
-	}
-	return true
-}
+func safeDocumentWorkshopCode(value string) bool { return pluginruntime.SafeDocumentResultCode(value) }
 
 // sanitizeDocumentEvidence preserves user-meaningful OCR/layout findings but
 // never returns host mount locations, generated scratch render paths, runtime

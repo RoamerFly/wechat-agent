@@ -2,11 +2,10 @@ package devicespec
 
 import (
 	"errors"
-	"regexp"
+
+	"wechat-bot/internal/identity"
 	"wechat-bot/internal/mcptools"
 )
-
-var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 type Settings struct {
 	Revision   int64                 `json:"revision"`
@@ -26,7 +25,7 @@ func (c Settings) Validate() error {
 		return errors.New("device_configuration_invalid")
 	}
 	for _, id := range c.Devices {
-		if !idPattern.MatchString(id) {
+		if !identity.ValidLegacyDeviceID(id) {
 			return errors.New("device_id_invalid")
 		}
 	}

@@ -16,7 +16,7 @@ wechat-bot/
 │  ├─ delivery/         发送、回执、补发
 │  ├─ media/            语音、音乐、视频与分享
 │  ├─ ui/               网页和目录交互
-│  ├─ mobile/           手机探索
+│  ├─ mobile/           旧设备功能与历史兼容资料
 │  └─ design/           自主冲浪与发言设计参考
 ├─ deploy/docker/       历史容器配置草稿
 ├─ examples/、configs/   示例与实验配置

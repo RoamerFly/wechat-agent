@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "port": {
+      "type": "integer",
+      "title": "OBS WebSocket 端口",
+      "description": "仅连接本机 127.0.0.1。OBS WebSocket v5 默认端口为 4455。",
+      "default": 4455,
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "password": {
+      "type": "string",
+      "title": "OBS WebSocket 密码",
+      "description": "仅宿主持有，用于连接本机 OBS WebSocket；不会显示给 Agent 或写入工具包。",
+      "x-secret": true,
+      "x-host-only": true,
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "required": ["password"],
+  "additionalProperties": false
+}

@@ -39,10 +39,11 @@ func safeThreadID(value string) bool {
 }
 
 type Capabilities struct {
-	MediaKinds        []string         `json:"mediaKinds"`
-	MediaSendMaxBytes map[string]int64 `json:"mediaSendMaxBytes"`
-	QuotedTextSend    bool             `json:"quotedTextSend"`
-	GroupMutations    []string         `json:"groupMutations"`
+	MediaKinds                []string         `json:"mediaKinds"`
+	MediaSendMaxBytes         map[string]int64 `json:"mediaSendMaxBytes"`
+	QuotedTextSend            bool             `json:"quotedTextSend"`
+	GroupMutations            []string         `json:"groupMutations"`
+	ThreadNotificationTargets []string         `json:"threadNotificationTargets"`
 }
 type UploadSource struct {
 	ID          string `json:"id"`
@@ -66,6 +67,7 @@ type ToolQuote struct {
 	ServerID  string `json:"server_id"`
 }
 type ToolStatus struct {
+	AccountID            string             `json:"-"`
 	CreatedAt            string             `json:"created_at,omitempty"`
 	SourceID             string             `json:"source_id,omitempty"`
 	Attempts             int                `json:"attempts,omitempty"`
@@ -78,6 +80,7 @@ type ToolStatus struct {
 	ThreadID             string             `json:"thread_id"`
 	ServerID             string             `json:"server_id"`
 	Reason               string             `json:"reason"`
+	ErrorCode            string             `json:"error_code,omitempty"`
 	VoicePartsIncomplete bool               `json:"voice_parts_incomplete,omitempty"`
 	VoiceChunks          []VoiceChunkStatus `json:"voice_chunks,omitempty"`
 	VoiceFailureStage    string             `json:"voice_failure_stage,omitempty"`
@@ -120,6 +123,9 @@ func (s *Sender) toolJSON(ctx context.Context, method, path, key string, body io
 	req.GetBody = nil
 	response, err := s.client.Do(req)
 	if err != nil {
+		if errors.Is(err, ErrWriteNotAdmitted) {
+			return nil, ErrWriteNotAdmitted
+		}
 		return nil, errors.New("native tool outcome unavailable; do not resend automatically")
 	}
 	defer response.Body.Close()
@@ -160,6 +166,18 @@ func (s *Sender) Capabilities(ctx context.Context) (Capabilities, error) {
 	return out, err
 }
 func (s *Sender) Upload(ctx context.Context, filename, contentType string, file io.Reader, size int64) (UploadSource, error) {
+	return s.upload(ctx, filename, contentType, file, size, "")
+}
+
+// UploadVerified binds the staged native source to the already verified bytes.
+func (s *Sender) UploadVerified(ctx context.Context, filename, contentType string, file io.Reader, size int64, sha256 string) (UploadSource, error) {
+	if len(sha256) != 64 {
+		return UploadSource{}, errors.New("invalid upload digest")
+	}
+	return s.upload(ctx, filename, contentType, file, size, sha256)
+}
+
+func (s *Sender) upload(ctx context.Context, filename, contentType string, file io.Reader, size int64, sha256 string) (UploadSource, error) {
 	out := UploadSource{Filename: filename, ContentType: contentType, ByteLength: size}
 	if filename == "" || len(filename) > 256 || strings.ContainsAny(filename, "/\\\r\n\x00") || size <= 0 || size > 512<<20 {
 		return out, errors.New("invalid upload")
@@ -193,10 +211,16 @@ func (s *Sender) Upload(ctx context.Context, filename, contentType string, file 
 		return out, errors.New("upload stream failed")
 	}
 	var source struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Bytes  int64  `json:"byteLength"`
+		SHA256 string `json:"sha256"`
 	}
 	if json.Unmarshal(raw, &source) != nil || !safeID(source.ID) {
 		return out, errors.New("invalid upload identity")
+	}
+	if sha256 != "" && (source.Name != filename || source.Bytes != size || source.SHA256 != sha256) {
+		return out, errors.New("native_upload_integrity_mismatch")
 	}
 	out.ID = source.ID
 	return out, nil
@@ -302,7 +326,10 @@ func (s *Sender) decodeToolStatus(raw []byte) (ToolStatus, error) {
 	if len(value.Reason) > 128 {
 		value.Reason = "native_job_failed"
 	}
-	status := ToolStatus{ID: value.ID, State: value.State, Phase: value.Phase, Kind: value.Kind, ThreadID: value.ThreadID, ServerID: value.ServerID, Reason: value.Reason}
+	status := ToolStatus{ID: value.ID, AccountID: value.AccountID, State: value.State, Phase: value.Phase, Kind: value.Kind, ThreadID: value.ThreadID, ServerID: value.ServerID, Reason: value.Reason}
+	if len(value.ErrorCode) <= 128 {
+		status.ErrorCode = value.ErrorCode
+	}
 	status.CreatedAt = value.CreatedAt
 	if value.SourceID != "" && !safeID(value.SourceID) {
 		return ToolStatus{}, errors.New("invalid media source identity")

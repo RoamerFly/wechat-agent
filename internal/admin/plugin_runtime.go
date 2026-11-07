@@ -65,7 +65,17 @@ func (m *Manager) installedPluginRuntime() (*pluginruntime.Controller, bool, err
 	}
 	var executor pluginhost.Executor
 	if ready {
-		executor = pluginruntime.InstalledExecutor(store, options)
+		installed := pluginruntime.InstalledExecutor(store, options)
+		if m.mobileRetired {
+			resolve := installed.Resolve
+			installed.Resolve = func(ctx context.Context, p pluginhost.Package, grant pluginhost.Grant) (pluginruntime.LaunchSpec, error) {
+				if p.ID == mobileDevicePluginID {
+					return pluginruntime.LaunchSpec{}, errDeviceServiceRetired
+				}
+				return resolve(ctx, p, grant)
+			}
+		}
+		executor = installed
 	}
 	h, err := pluginruntime.NewController(store, executor)
 	if err != nil {
@@ -95,6 +105,11 @@ func (m *Manager) applyServiceRetention(retention serviceRetention) {
 
 func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/plugin-packages/{id}/runtime", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if s.manager.mobileRetired && id == mobileDevicePluginID {
+			fail(w, http.StatusGone, errDeviceServiceRetired.Error())
+			return
+		}
 		var input struct {
 			Action         string `json:"action"`
 			Revision       int    `json:"revision"`
@@ -130,7 +145,6 @@ func (s *Server) pluginRuntimeRoute(mux *http.ServeMux) {
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 			defer cancel()
 		}
-		id := r.PathValue("id")
 		switch input.Action {
 		case "enable_on_demand":
 			err = h.EnableOnDemand(ctx, id, input.Revision)

@@ -67,6 +67,11 @@ type mobilePlanPluginPolicy struct {
 // mobilePlannerReady is deliberately non-starting: discovery and task queueing
 // cannot install, enable, launch, or authorize a plugin as a side effect.
 func (m *Manager) mobilePlannerReady(ctx context.Context) error {
+	// The retired Windows path keeps task history only.  A persisted package
+	// must never cause a planner model call or runtime launch after retirement.
+	if m == nil || m.mobileRetired {
+		return errDeviceServiceRetired
+	}
 	store, err := m.packageStore()
 	if err != nil {
 		return errors.New("device_planner_plugin_required")
@@ -230,7 +235,10 @@ func (m *Manager) newMobilePlanPluginPolicyWithModel(ctx context.Context, task m
 // currentMobilePlanningSource gates model construction.  A revoked/changed
 // task never writes a provider key or reaches the configured model factory.
 func (m *Manager) currentMobilePlanningSource(task mobile.Task, observation mobile.Observation) (mobile.Task, mobile.Settings, error) {
-	if m == nil || m.mobile == nil || task.ID == "" || observation.ID == "" || len(observation.PNG) == 0 {
+	if m == nil || m.mobileRetired {
+		return mobile.Task{}, mobile.Settings{}, errDeviceServiceRetired
+	}
+	if m.mobile == nil || task.ID == "" || observation.ID == "" || len(observation.PNG) == 0 {
 		return mobile.Task{}, mobile.Settings{}, errors.New("device_planner_source_invalid")
 	}
 	current, ok := m.mobile.Get(task.ID)
@@ -282,6 +290,12 @@ func mobilePlanSourceVersion(task mobile.Task, obs mobile.Observation, settingsR
 }
 
 func (p *mobilePlanPluginPolicy) Check(ctx context.Context, job pluginhost.Job, cap pluginhost.Capability) error {
+	// Policies may outlive the request that created them.  Do not let an
+	// already-created policy reach the model after the host switched to the
+	// Windows history-only service.
+	if p != nil && p.manager != nil && p.manager.mobileRetired {
+		return errDeviceServiceRetired
+	}
 	if p.checkOverride != nil {
 		return p.checkOverride(ctx, job, cap)
 	}

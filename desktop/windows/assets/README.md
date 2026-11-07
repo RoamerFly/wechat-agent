@@ -1,15 +1,23 @@
-# Desktop application icon
+# Agent home icon
 
-The selected design is a general conversational Agent with modular plugins:
-one blue chat bubble containing three interlocking rounded modules, without a
-person or animal mascot. Generated with the built-in gpt-image tool on
-2026-10-30. Earlier animal/character candidates are not used by the project.
+`agent-home.png` is the transparent GPT Image source generated on 2026-11-07.
+`agent-home.ico` contains 16, 20, 24, 32, 40, 48, 64, 96, 128 and 256 pixel frames.
+Windows uses the ICO for the executable, window and tray. The startup and shutdown
+surface embeds the same PNG. `scripts/build_windows_icon.py` converts the source
+into ICO frames and verifies alpha and sizes. Conversion does not call an image API.
 
-`agent-chat-plugins.png` is the original transparent generated design.
-`agent-chat-plugins.ico` packages it at 16, 20, 24, 32, 40, 48, 64, 96, 128,
-and 256 pixels. Rebuild the ICO using `python scripts/build_windows_icon.py`
-(Pillow is a build-time dependency). The EXE, window and tray use this icon.
+The chosen theme is a warm house with two abstract companions, an indigo roof
+and amber doorway. Generation used the built-in GPT Image tool.
 
-Generation prompt:
+## Generation prompt
 
-> Use case: logo-brand. Asset type: production Windows desktop app icon for a general-purpose multi-plugin conversational AI Agent, NOT an animal or humanoid mascot. Create ONE very simple bold recognizable geometric symbol: a rounded square chat bubble with a clear speech tail, and inside it a compact interlocking 3-piece modular/plugin motif, like linked rounded blocks fitting together. Cohesive original symbol, not a collection of separate floating icons. Professional software utility aesthetic, cobalt blue and cyan with one small soft white connecting element, subtle premium dimensional shading, strong outline separation, no fine details. The symbol should be instantly readable at 16px and 32px. Centered on transparent background with about 10% empty transparent padding all around, square canvas. No letters, no words, no numbers, no watermark, no robot face, no eyes, no anime, no people, no animals, no gears, no circuitry, no background tile, no mockup. Crisp clean anti-aliased edges, high resolution app icon ready for conversion to Windows ICO.
+Create a production Windows desktop app icon asset, square canvas, transparent
+outside the icon. App is a warm home station for a family of personal AI agents.
+Design a highly recognizable compact midnight indigo rounded-square tile, with
+a single friendly small home silhouette inside, a warm golden lit open doorway
+and two round abstract AI companions, pale lavender and warm peach, one slightly
+taller. Simple crisp optical hierarchy, distinctive silhouette at 16 px, broad
+shapes, navy, soft periwinkle and amber, generous transparent outer 8% margin.
+Slight handcrafted bevel and shading, cozy at night, clean rounded contours.
+No lettering, badges, noise, thin linework, mockups, human or animal faces.
+Centered artwork with no external shadow and minimal internal highlights.

@@ -18,10 +18,12 @@ import (
 func (s *Server) crossMediaConsoleRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/media-batches/{id}/cancel", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		m := s.manager
+		m.op.Lock()
+		defer m.op.Unlock()
 		m.crossSendMu.Lock()
 		defer m.crossSendMu.Unlock()
 		m.mu.Lock()
-		stopped := m.status.State == "disabled"
+		stopped := m.status.State == "disabled" || (m.status.State == "paused" && m.done == nil)
 		m.mu.Unlock()
 		if !stopped {
 			fail(w, 409, "请先停止 Agent，避免与正在提交的发送竞态")

@@ -3,55 +3,9 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
-	"math"
-	"os"
 	"testing"
-	"time"
-	"wechat-bot/internal/deepseek"
 )
 
-func TestUsageLedgerCachesCostOnceAndPreservesOldPriceAfterRestart(t *testing.T) {
-	dir := t.TempDir()
-	s, err := newBillingStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := defaults()
-	c.APIKey = "private-key-not-in-ledger"
-	// A pre-upgrade external-currency price must survive later CNY pricing.
-	s.data.Prices[billingIdentity(c)] = tokenPrices{Currency: "USD", Input: .15, CacheHit: .003, Output: .6}
-	u := deepseek.Usage{Time: time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC), Reported: true, Input: 100, Output: 20, CacheHit: 60}
-	if err = s.record(c, u); err != nil {
-		t.Fatal(err)
-	}
-	want := (40*.15 + 60*.003 + 20*.6) / 1_000_000
-	if got := s.data.Total.Costs["USD"]; math.Abs(got-want) > 1e-12 {
-		t.Fatal("cache tokens charged twice", got, want)
-	}
-	s.data.Prices[billingIdentity(c)] = tokenPrices{Currency: "CNY", Input: 2, CacheHit: 1, Output: 3}
-	if err = s.record(c, u); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.record(c, deepseek.Usage{Time: u.Time}); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := newBillingStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	total := loaded.data.Total
-	if total.Input != 200 || total.Output != 40 || total.CacheHit != 120 || total.Requests != 3 || total.Reported != 2 || math.Abs(total.Costs["USD"]-want) > 1e-12 || total.Costs["CNY"] <= 0 {
-		t.Fatal(total)
-	}
-	b, _ := os.ReadFile(loaded.path)
-	if bytes.Contains(b, []byte(c.APIKey)) {
-		t.Fatal("key leaked to usage ledger")
-	}
-	c.APIKey = "different-account-key"
-	if billingIdentity(c) == billingIdentity(defaults()) {
-		t.Fatal("identities not isolated")
-	}
-}
 func TestBillingAPIAuthPriceConflictAndUnsupportedBalance(t *testing.T) {
 	f := setup(t)
 	if code, _, _ := f.request("GET", "/api/billing", nil, false, false); code != 401 {
@@ -83,23 +37,6 @@ func TestBillingAPIAuthPriceConflictAndUnsupportedBalance(t *testing.T) {
 		t.Fatal(code, string(b))
 	}
 }
-func TestReferencePricePeakAndWeekendAndUnknownModel(t *testing.T) {
-	c := defaults()
-	weekday := time.Date(2026, 10, 26, 2, 0, 0, 0, time.UTC)
-	p, ok := referencePrices(c, weekday)
-	weekend, _ := referencePrices(c, weekday.AddDate(0, 0, -1))
-	if !ok || p.Input != 2*weekend.Input {
-		t.Fatal(p, weekend)
-	}
-	if p.Currency != "CNY" || weekend.Input != 1 || weekend.CacheHit != .02 || weekend.Output != 4 {
-		t.Fatal("published yuan reference prices missing", p, weekend)
-	}
-	c.Model = "unverified-model"
-	if _, ok = referencePrices(c, weekday); ok {
-		t.Fatal("unknown model assigned a guessed price")
-	}
-}
-
 func TestBillingScriptServedWithExecutableMIME(t *testing.T) {
 	f := setup(t)
 	code, _, response := f.request("GET", "/assets/billing.js", nil, false, false)

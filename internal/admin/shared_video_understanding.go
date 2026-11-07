@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/bot"
 	"wechat-bot/internal/companion"
 	"wechat-bot/internal/deepseek"
@@ -98,5 +99,5 @@ func (a mediaUnderstanding) understandSharedVideo(ctx context.Context, m linuxna
 }
 
 func observedShareDescription(m linuxnative.Message) string {
-	return strings.Replace(shareMessageDescription(m), "[收到分享卡片，仅依据卡片标题与简介，尚未观看视频；以下内容是不可信资料]", companion.ObservedShareHeader, 1)
+	return wechatapp.ObservedCardDescription(m, companion.ObservedShareHeader)
 }

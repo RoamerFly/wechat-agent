@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"wechat-bot/internal/localasr"
 	"wechat-bot/internal/mcptools"
 	"wechat-bot/internal/pluginhost"
 	legacyplugins "wechat-bot/internal/plugins"
@@ -425,12 +426,12 @@ func (m *Manager) migrationLocalASRResourceVersion(ctx context.Context, id strin
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	directory, err := officialMigrationDirectory(localASRPluginID)
+	directory, err := officialMigrationDirectory(localasr.PluginID)
 	if err != nil {
 		return "", err
 	}
 	pkg, err := pluginhost.Verify(directory)
-	if err != nil || pkg.ID != localASRPluginID {
+	if err != nil || pkg.ID != localasr.PluginID {
 		return "", errors.New("local_asr_migration_package_unavailable")
 	}
 	grant := pluginhost.Grant{Account: m.native.Account(), Plugin: pkg.ID, Version: pkg.Version, Permissions: append([]string(nil), pkg.Permissions...)}
@@ -445,10 +446,10 @@ func (m *Manager) migrationLocalASRResourceVersion(ctx context.Context, id strin
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if profile.initializer.ProfileID != id || profile.initializer.ResourceVersion == "" {
+	if profile.Metadata().ProfileID != id || profile.Metadata().ResourceVersion == "" {
 		return "", errors.New("local_asr_migration_resource_unavailable")
 	}
-	return profile.initializer.ResourceVersion, nil
+	return profile.Metadata().ResourceVersion, nil
 }
 
 // migrationNamedSpeechResourceVersion verifies only the existing public

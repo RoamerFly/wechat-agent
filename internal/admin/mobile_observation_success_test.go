@@ -19,6 +19,15 @@ import (
 	"wechat-bot/internal/pluginruntime"
 )
 
+type observationTestIOHost struct {
+	mobile.IOHost
+	open func(context.Context, mobile.IOOptions) (mobile.IOBroker, error)
+}
+
+func (h observationTestIOHost) Open(ctx context.Context, options mobile.IOOptions) (mobile.IOBroker, error) {
+	return h.open(ctx, options)
+}
+
 // Runs the same installed-package / devicebroker.OpenIO contract as
 // TestLiveMobileDevicePluginContract, but through the host's ObserveOnce API.
 // Its ADB endpoint and runner are synthetic; no device, model, or message is
@@ -59,11 +68,11 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 	if _, err = store.SetEnabled(t.Context(), installed.Package.ID, installed.Revision, true); err != nil {
 		t.Fatal(err)
 	}
-	fishID, err := f.manager.fish.bind(f.manager.native.Account())
+	fishID, err := f.manager.fish.Bind(f.manager.native.Account())
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundFishID, bindingID, err := f.manager.fish.bindDevice(f.manager.native.Account(), "synthetic")
+	boundFishID, bindingID, err := f.manager.fish.BindDevice(f.manager.native.Account(), "synthetic")
 	if err != nil || boundFishID != fishID || bindingID == "" {
 		t.Fatalf("bind fish device fish=%q binding=%q err=%v", boundFishID, bindingID, err)
 	}
@@ -78,9 +87,8 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	server, calls := &mobileIOTestADBServer{}, 0
-	previous := openMobileDeviceBroker
-	openMobileDeviceBroker = func(ctx context.Context, option devicebroker.Options) (devicebroker.IOBroker, error) {
-		option.ADBServer = server
+	f.manager.deviceIO = observationTestIOHost{IOHost: devicebroker.Host{}, open: func(ctx context.Context, input mobile.IOOptions) (mobile.IOBroker, error) {
+		option := devicebroker.Options{IOOptions: input, ADBServer: server}
 		option.Runner = func(ctx context.Context, path string, args []string, limit int64, timeout time.Duration) ([]byte, error) {
 			calls++
 			if path != filepath.Join(options.DeviceToolsRoots[0], "adb.exe") || len(args) < 7 || !reflect.DeepEqual(args[:6], []string{"-H", "127.0.0.1", "-P", "5037", "-s", "synthetic-serial-synthetic"}) || limit < 1 || timeout <= 0 {
@@ -105,8 +113,7 @@ func TestMobileObservationOnceInstalledRuntime(t *testing.T) {
 			}
 		}
 		return devicebroker.OpenIO(ctx, option)
-	}
-	t.Cleanup(func() { openMobileDeviceBroker = previous })
+	}}
 	started, err := service.Start(mobile.Source{Admin: true, MessageID: "fish-bound-start"}, "synthetic", "查看授权设备")
 	if err != nil || started.FishID != fishID || started.DeviceBindingID != bindingID {
 		t.Fatalf("fish-bound start task=%#v err=%v", started, err)

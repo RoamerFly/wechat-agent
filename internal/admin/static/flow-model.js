@@ -31,7 +31,19 @@
   ['condition','条件规划','自定义','violet','tools',[],'标注一个计划中的判断分支'],
   ['action','行动规划','自定义','amber','tools',[],'记录想扩展的功能与行动']
  ];
- const catalog=Object.fromEntries(definitions.map(([kind,title,group,tone,icon,pages,summary])=>[kind,{kind,title,group,tone,icon,pages,summary}]));
+ const catalog=Object.fromEntries(definitions.map(([kind,title,group,tone,icon,pages,summary])=>[kind,{kind,title,group,tone,icon,pages:[...pages],summary}]));
+ // Do not briefly expose retired device controls before the authenticated
+ // runtime status has loaded. A non-retired server restores this entry.
+ let deviceControlRetired=true;
+ function setDeviceControlRetired(value){
+  deviceControlRetired=value===true;
+  const pages=['plugins','mcp','permissions'];
+  if(!deviceControlRetired)pages.splice(2,0,'mobile');
+  catalog.tools.pages=pages;
+  catalog.tools.summary=deviceControlRetired?'联网、MCP、媒体与本机工具；设备记录已归档':'联网、MCP、媒体与本机能力';
+  return deviceControlRetired;
+ }
+ setDeviceControlRetired(true);
  const tones=['blue','teal','violet','amber','rose','slate'];
  const clone=x=>JSON.parse(JSON.stringify(x));
  const bytes=s=>new TextEncoder().encode(s).length;
@@ -96,5 +108,5 @@
   for(const e of doc.edges){const a=byID.get(e.from),b=byID.get(e.to);if(!a||!b)continue;const dx=b.x-a.x,dy=b.y-a.y;let from,to;if(a===b){from='east';to='north'}else if(Math.abs(dx)>=Math.abs(dy)){from=dx>=0?'east':'west';to=dx>=0?'west':'east'}else{from=dy>=0?'south':'north';to=dy>=0?'north':'south'}const s=ports(a,from),t=ports(b,to),route=search(s.stub,t.stub);if(route){const all=simplify([s.anchor,...route,t.anchor]);paths.set(e.id,rounded(all));points.set(e.id,all)}else paths.set(e.id,edgePath(a,b));}
   return {paths,points,degraded:false};
  }
- return {W,H,catalog,tones,clone,normalize,parse,uid,removeNode,coverage,bounds,arrange,edgePath,routeEdges,edgeRole};
+ return {W,H,catalog,tones,clone,normalize,parse,uid,removeNode,coverage,bounds,arrange,edgePath,routeEdges,edgeRole,setDeviceControlRetired,isDeviceControlRetired:()=>deviceControlRetired};
 });

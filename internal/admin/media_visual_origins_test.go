@@ -25,7 +25,7 @@ func boundVisualFixture(t *testing.T) (*webFixture, *mediaPluginPolicy, *bool) {
 	t.Helper()
 	f, _, incoming, _ := mediaPolicyFixture(t, false)
 	valid := true
-	policy, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), incoming.images, boundVisualInvocation(), 2, func(ctx context.Context) error {
+	policy, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), incoming.Images(), boundVisualInvocation(), 2, func(ctx context.Context) error {
 		if !valid {
 			return errors.New("synthetic_visual_source_revoked")
 		}
@@ -39,17 +39,17 @@ func boundVisualFixture(t *testing.T) (*webFixture, *mediaPluginPolicy, *bool) {
 
 func verifiedVisualPluginReply(t *testing.T, policy *mediaPluginPolicy, text string) json.RawMessage {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"ok": true, "observation": text, "status": "observed", "sources": policy.refs, "coverage": "provided_images_only", "untrusted_external_content": true, "audio_observed": false, "requested_model": policy.model, "requested_max_tokens": policy.tokens, "thinking": policy.thinking, "reasoning_effort": nil, "provider_model": nil, "usage": nil})
+	raw, err := json.Marshal(map[string]any{"ok": true, "observation": text, "status": "observed", "sources": policy.Parameters().Refs, "coverage": "provided_images_only", "untrusted_external_content": true, "audio_observed": false, "requested_model": policy.Parameters().Model, "requested_max_tokens": policy.Parameters().Tokens, "thinking": policy.Parameters().Thinking, "reasoning_effort": nil, "provider_model": nil, "usage": nil})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return raw
 }
 
-func completeBoundVisualForTest(t *testing.T, policy *mediaPluginPolicy) {
+func completeBoundVisualForTest(t *testing.T, policy *mediaPluginPolicy) pluginhost.Job {
 	t.Helper()
 	job, capability := mediaJob(policy)
-	job.Arguments = policy.arguments
+	job.Arguments = policy.Arguments()
 	job, created, err := policy.store.CreateJob(t.Context(), job)
 	if err != nil || !created {
 		t.Fatal("visual intent was not created", err)
@@ -72,15 +72,15 @@ func completeBoundVisualForTest(t *testing.T, policy *mediaPluginPolicy) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy.completedJob = job
-	if err := policy.checkCompleted(t.Context()); err != nil {
+	if err := policy.Check(t.Context(), job, pluginhost.Capability{}); err != nil {
 		t.Fatal(err)
 	}
+	return job
 }
 
 func TestBoundMediaVisualUsesPluginConfigurationAndHostSourceWithoutNativeMessage(t *testing.T) {
 	f, policy, _ := boundVisualFixture(t)
-	if policy.receivedSharePolicy != nil || policy.invocation().Thread != "host:synthetic-visual-origin" || len(policy.invocation().SourceVersions) != 1 || policy.refs[0].Version != 2 || policy.tokens != 2048 {
+	if policy.receivedSharePolicy != nil || policy.Invocation().Thread != "host:synthetic-visual-origin" || len(policy.Invocation().SourceVersions) != 1 || policy.Parameters().Refs[0].Version != 2 || policy.Parameters().Tokens != 2048 {
 		t.Fatal("bound visual origin fabricated an incoming message or lost source/version")
 	}
 	f.manager.config.Enabled = false
@@ -90,7 +90,7 @@ func TestBoundMediaVisualUsesPluginConfigurationAndHostSourceWithoutNativeMessag
 	calls := 0
 	policy.post = func(_ context.Context, endpoint string, headers map[string]string, body json.RawMessage, _ int64, _ time.Duration) (json.RawMessage, error) {
 		calls++
-		if endpoint != "https://provider.example/chat/completions" || headers["Authorization"] != "Bearer synthetic-private-key" || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(policy.images[0].Data))) || bytes.Contains(body, []byte("legacy-")) || bytes.Contains(body, []byte("$media_ref")) {
+		if endpoint != "https://provider.example/chat/completions" || headers["Authorization"] != "Bearer synthetic-private-key" || !bytes.Contains(body, []byte(base64.StdEncoding.EncodeToString(policy.Images()[0].Data))) || bytes.Contains(body, []byte("legacy-")) || bytes.Contains(body, []byte("$media_ref")) {
 			t.Fatal("bound visual route did not use plugin-owned configuration/source")
 		}
 		return json.RawMessage(mediaReply), nil
@@ -120,21 +120,25 @@ func TestBoundMediaVisualRejectsRevocationDuringModelAndAfterCompletion(t *testi
 			*valid = false
 			return json.RawMessage(mediaReply), nil
 		}
-		if _, err := policy.Service(t.Context(), job, capability, "wechat/model_request", mediaRequest(policy)); err == nil || len(policy.providerReply) != 0 {
+		if _, err := policy.Service(t.Context(), job, capability, "wechat/model_request", mediaRequest(policy)); err == nil {
 			t.Fatal("revoked model response was retained", err)
 		}
 		if _, err := policy.Service(t.Context(), job, capability, "wechat/model_request", mediaRequest(policy)); err == nil || calls != 1 {
 			t.Fatal("revoked model request replayed", err, calls)
 		}
+		*valid = true
+		if _, err := policy.Validate(t.Context(), job, capability, verifiedVisualPluginReply(t, policy, "Synthetic pixels")); err == nil {
+			t.Fatal("revoked model response was retained after authority was restored")
+		}
 	})
 	t.Run("after_completion", func(t *testing.T) {
 		_, policy, valid := boundVisualFixture(t)
-		completeBoundVisualForTest(t, policy)
+		completed := completeBoundVisualForTest(t, policy)
 		*valid = false
-		if err := policy.checkCompleted(t.Context()); err == nil {
+		if err := policy.Check(t.Context(), completed, pluginhost.Capability{}); err == nil {
 			t.Fatal("completed visual result ignored source revocation")
 		}
-		if _, err := policy.store.PrivateJobResult(t.Context(), policy.completedJob, func(ctx context.Context, job pluginhost.Job) error {
+		if _, err := policy.store.PrivateJobResult(t.Context(), completed, func(ctx context.Context, job pluginhost.Job) error {
 			return policy.Check(ctx, job, pluginhost.Capability{})
 		}); err == nil {
 			t.Fatal("revoked private visual observation remained readable")
@@ -145,20 +149,20 @@ func TestBoundMediaVisualRejectsRevocationDuringModelAndAfterCompletion(t *testi
 func TestBoundMediaVisualCopiesSourceInputsAndRequiresAuthority(t *testing.T) {
 	f, _, incoming, _ := mediaPolicyFixture(t, false)
 	invocation := boundVisualInvocation()
-	images := []deepseek.Image{{Data: append([]byte(nil), incoming.images[0].Data...)}}
+	images := []deepseek.Image{{Data: append([]byte(nil), incoming.Images()[0].Data...)}}
 	policy, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), images, invocation, 2, func(context.Context) error { return nil }, "copy source", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := append([]byte(nil), policy.images[0].Data...)
+	before := append([]byte(nil), policy.Images()[0].Data...)
 	images[0].Data[0] ^= 1
 	invocation.SourceVersions["synthetic-image-source"] = 99
-	if !bytes.Equal(before, policy.images[0].Data) || policy.invocation().SourceVersions["synthetic-image-source"] != 2 {
+	if !bytes.Equal(before, policy.Images()[0].Data) || policy.Invocation().SourceVersions["synthetic-image-source"] != 2 {
 		t.Fatal("caller mutated an approved visual binding")
 	}
-	returned := policy.invocation()
+	returned := policy.Invocation()
 	returned.SourceVersions["synthetic-image-source"] = 42
-	if policy.invocation().SourceVersions["synthetic-image-source"] != 2 {
+	if policy.Invocation().SourceVersions["synthetic-image-source"] != 2 {
 		t.Fatal("returned invocation exposed mutable source proof")
 	}
 	for _, action := range []string{"missing_proof", "foreign_account", "missing_source", "revoked"} {
@@ -174,7 +178,7 @@ func TestBoundMediaVisualCopiesSourceInputsAndRequiresAuthority(t *testing.T) {
 		case "revoked":
 			check = func(context.Context) error { return errors.New("revoked") }
 		}
-		if _, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), incoming.images, invocation, 2, check, "bound source", 0); err == nil {
+		if _, err := f.manager.newBoundMediaVisualObservationPolicy(t.Context(), incoming.Images(), invocation, 2, check, "bound source", 0); err == nil {
 			t.Fatal("invalid visual origin accepted", action)
 		}
 	}
@@ -184,16 +188,16 @@ func TestBoundMediaVisualPromptUsesUnicodeContract(t *testing.T) {
 	f, native, incoming, ctx := mediaPolicyFixture(t, false)
 	for _, length := range []int{3000, 8192, 8193} {
 		prompt := strings.Repeat("画", length)
-		policy, err := f.manager.newBoundMediaVisualObservationPolicy(ctx, incoming.images, boundVisualInvocation(), 2, func(context.Context) error { return nil }, prompt, 0)
-		if length <= 8192 && (err != nil || policy.prompt != prompt) || length > 8192 && err == nil {
+		policy, err := f.manager.newBoundMediaVisualObservationPolicy(ctx, incoming.Images(), boundVisualInvocation(), 2, func(context.Context) error { return nil }, prompt, 0)
+		if length <= 8192 && (err != nil || policy.Parameters().Prompt != prompt) || length > 8192 && err == nil {
 			t.Fatal("bound visual prompt used byte count or truncated input", length, err)
 		}
-		policy, err = f.manager.newMediaPluginPolicy(ctx, native.msg, prompt, incoming.images, 0)
-		if length <= 8192 && (err != nil || policy.prompt != prompt) || length > 8192 && err == nil {
+		policy, err = f.manager.newMediaPluginPolicy(ctx, native.msg, prompt, incoming.Images(), 0)
+		if length <= 8192 && (err != nil || policy.Parameters().Prompt != prompt) || length > 8192 && err == nil {
 			t.Fatal("incoming visual prompt differs from public Unicode contract", length, err)
 		}
 	}
-	if _, err := f.manager.newBoundMediaVisualObservationPolicy(ctx, incoming.images, boundVisualInvocation(), 2, func(context.Context) error { return nil }, string([]byte{255}), 0); err == nil {
+	if _, err := f.manager.newBoundMediaVisualObservationPolicy(ctx, incoming.Images(), boundVisualInvocation(), 2, func(context.Context) error { return nil }, string([]byte{255}), 0); err == nil {
 		t.Fatal("invalid UTF-8 visual prompt accepted")
 	}
 }
@@ -249,11 +253,11 @@ func TestLiveBoundMediaVisualIsolationContract(t *testing.T) {
 		calls++
 		return json.RawMessage(mediaReply), nil
 	}
-	text, err := policy.observe(t.Context())
+	text, err := policy.Observe(t.Context())
 	if err != nil || text != "Synthetic pixels" || calls != 1 {
 		t.Fatal("actual isolated bound visual call failed", text, calls, err)
 	}
-	if err := policy.checkCompleted(t.Context()); err != nil {
+	if err := policy.CheckCompleted(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	jobs, err := policy.store.Jobs(t.Context(), "media-understanding", 0, 10)
@@ -261,7 +265,7 @@ func TestLiveBoundMediaVisualIsolationContract(t *testing.T) {
 		t.Fatal("isolated visual checkpoint lost host origin/privacy", jobs, err)
 	}
 	*valid = false
-	if err := policy.checkCompleted(t.Context()); err == nil {
+	if err := policy.CheckCompleted(t.Context()); err == nil {
 		t.Fatal("actual completed observation ignored source revocation")
 	}
 }

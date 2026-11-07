@@ -129,6 +129,23 @@ func (j *Jobs) List(scope string) []Process {
 	}
 	return out
 }
+
+// FindByKey is a scoped read of the authoritative job, including a job whose
+// start response was lost. It never submits or adopts work.
+func (j *Jobs) FindByKey(scope, key string) (Process, bool) {
+	if scope == "" || key == "" {
+		return Process{}, false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, p := range j.items {
+		if p.Scope == scope && p.Key == key {
+			return processCopy(p), true
+		}
+	}
+	return Process{}, false
+}
+
 func (j *Jobs) Status(scope, id string, cancel bool) (Process, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -360,7 +377,12 @@ func (j *Jobs) start(cfg Config, scope, key, path, command string, argv []string
 	}()
 	return processCopy(p), nil
 }
-func (j *Jobs) Close() {
+
+// BeginShutdown prevents any later Start from registering a process and
+// cancels every process already registered.  The same mutex also protects the
+// final Start check, so a desktop stop and a late tool call have a defined
+// order rather than a check-then-register gap.
+func (j *Jobs) BeginShutdown() {
 	j.mu.Lock()
 	j.closed = true
 	for _, p := range j.items {
@@ -369,5 +391,12 @@ func (j *Jobs) Close() {
 		}
 	}
 	j.mu.Unlock()
+}
+
+// Close waits for running process bookkeeping after BeginShutdown. Callers
+// that need a bounded desktop exit can invoke BeginShutdown first and put this
+// wait behind their own context deadline.
+func (j *Jobs) Close() {
+	j.BeginShutdown()
 	j.wg.Wait()
 }

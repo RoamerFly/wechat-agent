@@ -6,12 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	wechatapp "wechat-bot/connected-apps/wechat/adapter"
 	"wechat-bot/internal/linuxnative"
 )
 
-type nativeCatalog interface {
-	Catalog(context.Context, string, string, string, string) (linuxnative.CatalogPage, error)
-}
+type nativeCatalog = wechatapp.CatalogReader
 
 func (s *Server) catalogRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/catalog", s.protected(func(w http.ResponseWriter, r *http.Request) {

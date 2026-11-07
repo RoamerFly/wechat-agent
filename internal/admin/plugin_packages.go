@@ -41,6 +41,17 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			return
 		}
 		id := r.PathValue("id")
+		// The retired controller is exposed only as a read-only archive.  Do
+		// this before consulting its installed declaration so a surviving old
+		// package cannot restore settings, runtime, or action controls.
+		if s.manager.mobileRetired && id == mobileDevicePluginID {
+			if err := s.manager.mobile.InitializationError(); err != nil {
+				fail(w, http.StatusServiceUnavailable, "手机历史数据暂不可用，请检查本地存储；原记录未覆盖")
+				return
+			}
+			respond(w, 200, s.mobilePluginArchive())
+			return
+		}
 		installed, err := store.Installed(r.Context(), id)
 		if err == nil && installed.Removed && id == mobileDevicePluginID {
 			state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace)
@@ -108,6 +119,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, result)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/{id}/configuration", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if s.manager.mobileRetired && r.PathValue("id") == mobileDevicePluginID {
+			fail(w, http.StatusGone, "手机控制已停用；不能修改历史工具配置")
+			return
+		}
 		var input pluginhost.ConfigUpdate
 		if !decode(w, r, &input) {
 			return
@@ -159,6 +174,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 		respond(w, 200, page)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/{id}/jobs/{job}/cancel", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		if s.manager.mobileRetired && r.PathValue("id") == mobileDevicePluginID {
+			fail(w, http.StatusGone, "手机控制已停用；不能取消历史工具任务")
+			return
+		}
 		var input struct {
 			Revision int `json:"revision"`
 		}
@@ -198,6 +217,25 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			fail(w, 500, "工具目录读取失败")
 			return
 		}
+		hadMobileInstalled := false
+		if s.manager.mobileRetired {
+			filtered := installed[:0]
+			for _, item := range installed {
+				if item.Package.ID == mobileDevicePluginID {
+					hadMobileInstalled = true
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+			installed = filtered
+			filteredCatalog := official[:0]
+			for _, item := range official {
+				if item.ID != mobileDevicePluginID {
+					filteredCatalog = append(filteredCatalog, item)
+				}
+			}
+			official = filteredCatalog
+		}
 		h, connected, runtimeErr := s.manager.installedPluginRuntime()
 		statuses := map[string]any{}
 		readiness := make(map[string]pluginPackageReadiness, len(installed))
@@ -208,7 +246,7 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			readiness[item.Package.ID] = pluginReadiness(r.Context(), store, h, item, connected)
 		}
 		retained := []string{}
-		if state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace); stateErr == nil && state.Revision > 0 {
+		if state, stateErr := store.ReadHostState(r.Context(), mobileDevicePluginID, mobileStateNamespace); stateErr == nil && (state.Revision > 0 || hadMobileInstalled) {
 			retained = append(retained, mobileDevicePluginID)
 		}
 		permissions := s.manager.Config().Companion.Permissions
@@ -269,6 +307,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			fail(w, 400, "工具包校验失败；请检查清单、文件摘要和目录权限")
 			return
 		}
+		if s.manager.mobileRetired && prepared.Package.ID == mobileDevicePluginID {
+			fail(w, http.StatusGone, "手机控制已停用；旧任务只保留为只读历史，不能重新安装")
+			return
+		}
 		respond(w, 200, prepared)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/import", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +340,10 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			fail(w, 400, "工具包检查失败：需要完整的 ZIP 工具包、有效清单和文件摘要，不能包含链接或重复路径")
 			return
 		}
+		if s.manager.mobileRetired && prepared.Package.ID == mobileDevicePluginID {
+			fail(w, http.StatusGone, "手机控制已停用；旧任务只保留为只读历史，不能重新安装")
+			return
+		}
 		respond(w, 200, prepared)
 	}))
 	mux.HandleFunc("POST /api/plugin-packages/install", s.protected(func(w http.ResponseWriter, r *http.Request) {
@@ -323,6 +369,20 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 			fail(w, 500, "工具存储不可用")
 			return
 		}
+		if s.manager.mobileRetired {
+			prepared, preparedErr := store.Prepared(r.Context(), input.Token)
+			if preparedErr != nil {
+				// Never pass an unreadable approval record through to installation
+				// while device control is retired. A stale or malformed token must
+				// not become a bypass around the retired package identity check.
+				fail(w, 409, "安装未完成：包尚未就绪、确认已失效、权限不匹配或文件已变化，请重新检查")
+				return
+			}
+			if prepared.Package.ID == mobileDevicePluginID {
+				fail(w, http.StatusGone, "手机控制已停用；旧任务只保留为只读历史，不能重新安装")
+				return
+			}
+		}
 		installed, err := store.Install(r.Context(), input.Token, input.Digest, input.Permissions)
 		if err != nil {
 			if errors.Is(err, pluginhost.ErrConfigurationMigrationRequired) {
@@ -337,23 +397,34 @@ func (s *Server) pluginPackageRoutes(mux *http.ServeMux) {
 }
 
 // An uninstalled package cannot supply a UI declaration. The host retains only
-// the history/resource view and existing-task stop controls, never creation or
-// settings actions from the former package.
+// the history/resource view, never creation, cancellation, settings or
+// observation actions from the former package.
 func (s *Server) mobilePluginArchive() map[string]any {
+	readOnly := s.manager.mobileRetired
 	overview := mobileOverview{Devices: []mobileDeviceOverview{}}
-	if observer, ok := s.manager.mobileObservationService(); ok {
-		overview = observer.Overview()
+	if !readOnly {
+		if observer, ok := s.manager.mobileObservationService(); ok {
+			overview = observer.Overview()
+		}
+	}
+	taskSection := pluginhost.UISection{ID: "tasks", Title: "保留的设备任务", Component: "tasks", Binding: "host_data.tasks"}
+	if !readOnly {
+		taskSection.Action = "tasks.cancel"
+	}
+	reason := "手机工具未安装；只能查看历史或停止已有任务"
+	if readOnly {
+		reason = "手机控制已停用；只能查看已保留的任务、截图和录屏"
 	}
 	return map[string]any{
 		"archive": true,
 		"ui_schema": pluginhost.UISchema{Version: 1, Sections: []pluginhost.UISection{
-			{ID: "tasks", Title: "保留的设备任务", Component: "tasks", Binding: "host_data.tasks", Action: "tasks.cancel"},
+			taskSection,
 			{ID: "resources", Title: "任务素材", Component: "resources", Binding: "host_data.resources"},
 			{ID: "diagnostics", Title: "状态与说明", Component: "diagnostics", Binding: "host_data.diagnostics"},
 		}},
 		"host_data": map[string]any{
-			"state": "archive", "tasks_retained": true, "tasks": s.manager.mobile.List(nil), "resources": map[string]any{}, "overview": overview,
-			"diagnostics": map[string]any{"planner_available": false, "planner_reason": "手机工具未安装；只能查看历史或停止已有任务"},
+			"state": "archive", "read_only": readOnly, "tasks_retained": true, "tasks": s.manager.mobile.List(nil), "resources": map[string]any{}, "overview": overview,
+			"diagnostics": map[string]any{"planner_available": false, "planner_reason": reason},
 		},
 	}
 }
